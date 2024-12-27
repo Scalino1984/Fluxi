@@ -1,0 +1,299 @@
+{% extends "base.html" %}
+
+{% block title %}Flux Bildarchiv{% endblock %}
+
+{% block content %}
+<h1>Flux Bildarchiv</h1>
+
+<!-- Suche -->
+<div class="mb-3 search-container">
+    <form id="searchForm" action="/archive" method="get" class="d-flex flex-column">
+        <div class="mb-3 w-100">
+            <label for="search" class="form-label">Suche:</label>
+            <input type="text" class="form-control" id="search" name="search" value="{{ search_query }}">
+        </div>
+        <div class="d-flex flex-wrap mt-3">
+            <button type="submit" class="btn btn-primary flex-fill" style="width: 33.33%;">Suchen</button>
+            <button type="reset" class="btn btn-secondary flex-fill ms-2" style="width: 33.33%;">Zurücksetzen</button>
+        </div>
+    </form>
+</div>
+
+<!-- Filter Accordion -->
+<div class="accordion" id="filterAccordion">
+    <div class="accordion-item">
+        <h2 class="accordion-header" id="headingOne">
+            <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseOne" aria-expanded="false" aria-controls="collapseOne">
+                Filteroptionen
+            </button>
+        </h2>
+        <div id="collapseOne" class="accordion-collapse collapse" aria-labelledby="headingOne" data-bs-parent="#filterAccordion">
+            <div class="accordion-body">
+                <form id="filterForm" action="/archive" method="get" class="d-flex flex-column flex-md-row flex-wrap">
+                    <div class="mb-3 flex-grow-1 me-md-3">
+                        <label for="date_from" class="form-label">Von Datum:</label>
+                        <input type="date" class="form-control" id="date_from" name="date_from" value="{{ date_from }}">
+                    </div>
+                    <div class="mb-3 flex-grow-1 me-md-3">
+                        <label for="date_to" class="form-label">Bis Datum:</label>
+                        <input type="date" class="form-control" id="date_to" name="date_to" value="{{ date_to }}">
+                    </div>
+                    <div class="mb-3 flex-grow-1 me-md-3">
+                        <label for="album_filter" class="form-label">Album:</label>
+                        <select class="form-control" id="album_filter" name="album">
+                            <option value="">Alle</option>
+                            {% for album in albums %}
+                                <option value="{{ album[0] }}" {% if album[0] == selected_album %}selected{% endif %}>{{ album[1] }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="mb-3 flex-grow-1 me-md-3">
+                        <label for="category_filter" class="form-label">Kategorie:</label>
+                        <select class="form-control" id="category_filter" name="category" multiple>
+                            <option value="">Alle</option>
+                            {% for category in categories %}
+                                <option value="{{ category[0] }}" {% if category[0] in selected_categories %}selected{% endif %}>{{ category[1] }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="mb-3 flex-grow-1 me-md-3">
+                        <label for="size_filter" class="form-label">Bildgröße:</label>
+                        <select class="form-control" id="size_filter" name="size">
+                            <option value="">Alle</option>
+                            <option value="small" {% if size == 'small' %}selected{% endif %}>Klein</option>
+                            <option value="medium" {% if size == 'medium' %}selected{% endif %}>Mittel</option>
+                            <option value="large" {% if size == 'large' %}selected{% endif %}>Groß</option>
+                        </select>
+                    </div>
+                    <div class="mb-3 flex-grow-1">
+                        <label for="month_filter" class="form-label">Monat:</label>
+                        <select class="form-control" id="month_filter" name="month">
+                            <option value="">Alle</option>
+                            {% for month in months %}
+                                <option value="{{ month }}" {% if month == selected_month %}selected{% endif %}>{{ month }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="mb-3 flex-grow-1">
+                        <label for="items_per_page" class="form-label">Bilder pro Seite:</label>
+                        <select class="form-control" id="items_per_page" name="items_per_page">
+                            <option value="15" {% if items_per_page == 15 %}selected{% endif %}>15</option>
+                            <option value="30" {% if items_per_page == 30 %}selected{% endif %}>30</option>
+                            <option value="50" {% if items_per_page == 50 %}selected{% endif %}>50</option>
+                            <option value="75" {% if items_per_page == 75 %}selected{% endif %}>75</option>
+                            <option value="100" {% if items_per_page == 100 %}selected{% endif %}>100</option>
+                        </select>
+                    </div>
+                    <input type="hidden" name="page" value="{{ page }}" />
+                    <div class="d-flex flex-wrap mt-3">
+                        <button type="submit" class="btn btn-primary flex-fill" style="width: 33.34%;">Filtern</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Archiv Anzeige -->
+<div id="archive" class="container-fluid">
+    <!-- Optionen für Alle auswählen und Bearbeitung -->
+    <div class="d-flex justify-content-between align-items-center mb-2">
+        <div>
+            <input type="checkbox" id="selectAll" /> Alle auswählen
+        </div>
+        <div class="d-flex align-items-center">
+            <button id="thumbgalleryBtn" class="btn btn-secondary me-2">Thumbgallery</button>
+            <button id="slideshowBtn" class="btn btn-secondary me-2">Slideshow</button>
+            <select id="gridLayout" class="form-select me-2" style="width: auto;">
+                <option value="2">2 nebeneinander</option>
+                <option value="3">3 nebeneinander</option>
+                <option value="4">4 nebeneinander</option>
+                <option value="5">5 nebeneinander</option>
+                <option value="6">6 nebeneinander</option>
+            </select>
+            <div class="dropdown">
+                <button class="btn btn-secondary dropdown-toggle" type="button" id="actionMenu" data-bs-toggle="dropdown" aria-expanded="false">
+                    Optionen
+                </button>
+                <ul class="dropdown-menu" aria-labelledby="actionMenu">
+                    <li><a class="dropdown-item" href="#" id="deleteSelected">Löschen</a></li>
+                    <li><a class="dropdown-item" href="#" id="addToCategory">Zu Kategorie hinzufügen</a></li>
+                    <li><a class="dropdown-item" href="#" id="addToAlbum">Zu Album hinzufügen</a></li>
+                    <li><a class="dropdown-item" href="#" id="downloadSelected">Aktuelle Auswahl downloaden</a></li>
+                </ul>
+            </div>
+        </div>
+    </div>
+
+    <div class="row" id="imageGrid">
+        {% for log in logs %}
+            <div class="col-12 col-md-6 col-lg-4 col-xl-3 col-xxl-2">
+                <div class="card mb-3 custom-bg">
+                    <div class="card-body p-0 position-relative">
+                        <!-- Bild anzeigen -->
+                        <img src="{{ log.output_file }}" class="img-fluid image-thumbnail" alt="Generiertes Bild" data-id="{{ log.id }}" data-filename="{{ log.output_file.split('/')[-1] }}" data-format="{{ log.output_file.split('.')[-1] }}" data-timestamp="{{ log.timestamp }}" data-album="{{ log.album }}" data-category="{{ log.category }}" data-prompt="{{ log.prompt }}" data-optimized_prompt="{{ log.optimized_prompt }}">
+                        <!-- Checkbox im Bild oben rechts -->
+                        <input type="checkbox" class="form-check-input select-item position-absolute top-0 end-0 m-2">
+                    </div>
+                </div>
+            </div>
+        {% endfor %}
+    </div>
+</div>
+
+<!-- Paginierung -->
+<div class="d-flex justify-content-center mt-4">
+    {% if page > 1 %}
+        <a class="btn btn-secondary me-2" href="?page={{ page - 1 }}&items_per_page={{ items_per_page }}{% if search_query %}&search={{ search_query }}{% endif %}{% if selected_album %}&album={{ selected_album }}{% endif %}{% if selected_categories %}&category={{ selected_categories | join(',') }}{% endif %}">Vorherige</a>
+    {% endif %}
+    {% if logs|length == items_per_page %}
+        <a class="btn btn-secondary" href="?page={{ page + 1 }}&items_per_page={{ items_per_page }}{% if search_query %}&search={{ search_query }}{% endif %}{% if selected_album %}&album={{ selected_album }}{% endif %}{% if selected_categories %}&category={{ selected_categories | join(',') }}{% endif %}">Nächste</a>
+    {% endif %}
+</div>
+
+<!-- "Nach oben"-Button -->
+<button id="scrollTopBtn" class="btn btn-primary" style="display: none; position: fixed; bottom: 20px; right: 20px; width: 100px; z-index: 99;">
+    Nach oben
+</button>
+
+<!-- Popup Modal -->
+<div id="imageModal" class="modal fade" tabindex="-1" aria-labelledby="imageModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="imageModalLabel">Bilddetails</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Schließen"></button>
+            </div>
+            <div class="modal-body">
+                <img id="modalImage" src="" class="img-fluid mb-3" alt="Bild">
+                <p><strong>Dateiname:</strong> <span id="modalFilename"></span></p>
+                <p><strong>Bildformat:</strong> <span id="modalFormat"></span></p>
+                <p><strong>Datum:</strong> <span id="modalTimestamp"></span></p>
+                <p><strong>Album:</strong> <span id="modalAlbum"></span></p>
+                <p><strong>Kategorie:</strong> <span id="modalCategory"></span></p>
+                <p><strong>Eingabeaufforderung:</strong> <span id="modalPrompt"></span></p>
+                <p><strong>Optimierte Eingabeaufforderung:</strong> <span id="modalOptimizedPrompt"></span></p>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Schließen</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Modal für Zuweisung zu Album -->
+<div id="assignAlbumModal" class="modal fade" tabindex="-1" aria-labelledby="assignAlbumModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="assignAlbumModalLabel">Zu Album hinzufügen</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Schließen"></button>
+            </div>
+            <div class="modal-body">
+                <form id="assignAlbumForm">
+                    <div class="mb-3">
+                        <label for="albumSelect" class="form-label">Album auswählen:</label>
+                        <select class="form-control" id="albumSelect" name="album">
+                            {% for album in albums %}
+                                <option value="{{ album[0] }}">{{ album[1] }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Abbrechen</button>
+                <button type="button" class="btn btn-primary" id="assignAlbumBtn">Hinzufügen</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Modal für Zuweisung zu Kategorie -->
+<div id="assignCategoryModal" class="modal fade" tabindex="-1" aria-labelledby="assignCategoryModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="assignCategoryModalLabel">Zu Kategorie hinzufügen</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Schließen"></button>
+            </div>
+            <div class="modal-body">
+                <form id="assignCategoryForm">
+                    <div class="mb-3">
+                        <label for="categorySelect" class="form-label">Kategorien auswählen:</label>
+                        <select class="form-control" id="categorySelect" name="category" multiple>
+                            {% for category in categories %}
+                                <option value="{{ category[0] }}">{{ category[1] }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Abbrechen</button>
+                <button type="button" class="btn btn-primary" id="assignCategoryBtn">Hinzufügen</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    document.addEventListener('DOMContentLoaded', function () {
+        // Event listener für das Zuweisen zu einem Album
+        document.getElementById('assignAlbumBtn').addEventListener('click', async function () {
+            const albumId = document.getElementById('albumSelect').value;
+            const selectedImages = getSelectedImages();
+            try {
+                const response = await fetch('/assign_to_album', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ albumId, selectedImages })
+                });
+                if (response.ok) {
+                    alert('Bilder wurden erfolgreich zugewiesen.');
+                    location.reload();
+                } else {
+                    alert('Fehler beim Zuweisen der Bilder.');
+                }
+            } catch (error) {
+                console.error('Fehler:', error);
+                alert('Fehler beim Zuweisen der Bilder.');
+            }
+            const albumModal = bootstrap.Modal.getInstance(document.getElementById('assignAlbumModal'));
+            albumModal.hide();
+        });
+
+        // Event listener für das Zuweisen zu Kategorien
+        document.getElementById('assignCategoryBtn').addEventListener('click', async function () {
+            const categoryIds = Array.from(document.getElementById('categorySelect').selectedOptions).map(option => option.value);
+            const selectedImages = getSelectedImages();
+            try {
+                const response = await fetch('/assign_to_category', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ categoryIds, selectedImages })
+                });
+                if (response.ok) {
+                    alert('Bilder wurden erfolgreich zugewiesen.');
+                    location.reload();
+                } else {
+                    alert('Fehler beim Zuweisen der Bilder.');
+                }
+            } catch (error) {
+                console.error('Fehler:', error);
+                alert('Fehler beim Zuweisen der Bilder.');
+            }
+            const categoryModal = bootstrap.Modal.getInstance(document.getElementById('assignCategoryModal'));
+            categoryModal.hide();
+        });
+
+        function getSelectedImages() {
+            const selectedImages = [];
+            document.querySelectorAll('input[type="checkbox"]:checked').forEach(checkbox => {
+                selectedImages.push(checkbox.value);
+            });
+            return selectedImages;
+        }
+    });
+</script>
+{% endblock %}

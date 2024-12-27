@@ -1,0 +1,368 @@
+{% extends "base.html" %}
+
+{% block title %}Flux Image Generator - Home{% endblock %}
+
+{% block content %}
+<h1>Flux Image Generator</h1>
+<form id="generateForm" class="needs-validation custom-bg p-3 rounded" novalidate>
+    <!-- Prompt-Eingabe -->
+    <div class="mb-3">
+        <label for="prompt" class="form-label">Prompt:</label>
+        <textarea class="form-control" id="prompt" name="prompt" rows="4" required></textarea>
+        <div class="invalid-feedback">Bitte geben Sie einen Prompt ein.</div>
+    </div>
+    <!-- Album-Auswahl -->
+    <div class="mb-3">
+        <label for="album_id" class="form-label">Album:</label>
+        <input class="form-control" id="album_id" name="album_id" list="albums" placeholder="Wählen oder neues Album eingeben">
+        <datalist id="albums">
+            {% for album in albums %}
+                <option value="{{ album[1] }}">{{ album[0] }}</option>
+            {% endfor %}
+        </datalist>
+    </div>
+    <!-- Kategorie-Auswahl -->
+    <div class="mb-3">
+        <label for="category_id" class="form-label">Kategorie:</label>
+        <input class="form-control" id="category_id" name="category_id" list="categories" placeholder="Wählen oder neue Kategorie eingeben">
+        <datalist id="categories">
+            {% for category in categories %}
+                <option value="{{ category[1] }}">{{ category[0] }}</option>
+            {% endfor %}
+        </datalist>
+    </div>
+    <!-- Buttons zur Generierung und Optimierung -->
+    <button type="button" class="btn btn-primary mb-3" onclick="startGeneration()">Bild Generieren</button>
+    <button type="button" class="btn btn-secondary mb-3" onclick="optimizeOnly()">Nur Optimieren</button>
+    <button type="button" class="btn btn-secondary mb-3" onclick="copyPrompt()">Prompt Kopieren</button>
+
+    <!-- Fortschrittsanzeige -->
+    <div class="progress mb-3" style="display: none;">
+        <div id="progressBar" class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar" style="width: 0%;" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"></div>
+    </div>
+
+    <!-- Fortschrittsnachricht -->
+    <div id="progressMessage" class="mb-3" style="display: none;">
+        <p>Generiere Bilder, bitte warten...</p>
+    </div>
+
+    <!-- Erweiterte Einstellungen -->
+    <div class="accordion" id="advancedSettingsAccordion">
+        <div class="accordion-item custom-bg">
+            <h2 class="accordion-header" id="headingOne">
+                <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseOne" aria-expanded="false" aria-controls="collapseOne">
+                    Erweiterte Einstellungen
+                </button>
+            </h2>
+            <div id="collapseOne" class="accordion-collapse collapse" aria-labelledby="headingOne" data-bs-parent="#advancedSettingsAccordion">
+                <div class="accordion-body">
+                    <div class="row g-3">
+                        <div class="col-12 col-md-6">
+                            <label for="num_outputs" class="form-label">Anzahl der Ausgaben:</label>
+                            <select class="form-control" id="num_outputs" name="num_outputs">
+                                <option value="1">1</option>
+                                <option value="2">2</option>
+                                <option value="3">3</option>
+                                <option value="4">4</option>
+                            </select>
+                        </div>
+                        <div class="col-12 col-md-6">
+                            <label for="aspect_ratio" class="form-label">Seitenverhältnis:</label>
+                            <select class="form-control" id="aspect_ratio" name="aspect_ratio">
+                                <option value="1:1">1:1</option>
+                                <option value="16:9">16:9</option>
+                                <option value="21:9">21:9</option>
+                                <option value="3:2">3:2</option>
+                                <option value="2:3">2:3</option>
+                                <option value="4:5">4:5</option>
+                                <option value="5:4">5:4</option>
+                                <option value="3:4">3:4</option>
+                                <option value="4:3">4:3</option>
+                                <option value="9:16">9:16</option>
+                                <option value="9:21">9:21</option>
+                            </select>
+                        </div>
+                        <div class="col-12 col-md-6">
+                            <label for="output_format" class="form-label">Ausgabeformat:</label>
+                            <select class="form-control" id="output_format" name="output_format">
+                                <option value="png">PNG</option>
+                                <option value="jpg">JPG</option>
+                                <option value="webp">WEBP</option>
+                            </select>
+                        </div>
+                        <div class="col-12 col-md-6">
+                            <label for="guidance_scale" class="form-label">Guidance Scale:</label>
+                            <input type="number" step="0.1" class="form-control" id="guidance_scale" name="guidance_scale" value="3.5">
+                        </div>
+                        <div class="col-12 col-md-6">
+                            <label for="output_quality" class="form-label">Ausgabequalität:</label>
+                            <input type="number" class="form-control" id="output_quality" name="output_quality" value="80">
+                        </div>
+                        <div class="col-12 col-md-6">
+                            <label for="prompt_strength" class="form-label">Prompt Strength:</label>
+                            <input type="number" step="0.1" class="form-control" id="prompt_strength" name="prompt_strength" value="0.8">
+                        </div>
+                        <div class="col-12 col-md-6">
+                            <label for="num_inference_steps" class="form-label">Anzahl der Inference Steps:</label>
+                            <input type="number" class="form-control" id="num_inference_steps" name="num_inference_steps" value="28">
+                        </div>
+                        <div class="col-12 col-md-6">
+                            <label for="lora_scale" class="form-label">LoRA Scale:</label>
+                            <input type="number" step="0.1" class="form-control" id="lora_scale" name="lora_scale" value="0.8">
+                        </div>
+                        <div class="col-12 col-md-6 d-flex align-items-center">
+                            <div class="form-switch mb-3">
+                                <input class="form-check-input" type="checkbox" id="hf_lora_toggle" name="hf_lora_toggle" checked>
+                                <label class="form-check-label" for="hf_lora_toggle">HF LoRA verwenden</label>
+                            </div>
+                            <div class="form-switch mb-3 ms-3">
+                                <input class="form-check-input" type="checkbox" id="agent" name="agent" checked>
+                                <label class="form-check-label" for="agent">Mistral Agent verwenden</label>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Batch-Optimierung -->
+    <div class="accordion mt-3" id="batchOptimizationAccordion">
+        <div class="accordion-item custom-bg">
+            <h2 class="accordion-header" id="headingTwo">
+                <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseTwo" aria-expanded="false" aria-controls="collapseTwo">
+                    Batch-Optimierung
+                </button>
+            </h2>
+            <div id="collapseTwo" class="accordion-collapse collapse" aria-labelledby="headingTwo" data-bs-parent="#batchOptimizationAccordion">
+                <div class="accordion-body">
+                    <textarea id="batchPrompts" class="form-control" rows="10" placeholder="Mehrere Prompts eingeben, einer pro Zeile"></textarea>
+                    <button type="button" class="btn btn-primary mt-2" onclick="batchOptimize()">Batch Optimieren</button>
+                </div>
+            </div>
+        </div>
+    </div>
+</form>
+
+<!-- Ausgabebereich -->
+<div id="output" class="mt-3"></div>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.12/cropper.min.js"></script>
+<script>
+    // Initialisierung des Croppers
+    let cropper;
+    function startCropper(imageElement) {
+        if (cropper) {
+            cropper.destroy();
+        }
+        cropper = new Cropper(imageElement, {
+            aspectRatio: 1,
+            viewMode: 1,
+            autoCropArea: 1,
+            responsive: true,
+        });
+    }
+
+    // Funktion zur Bildgenerierung
+    function startGeneration() {
+        const form = document.getElementById('generateForm');
+        if (!form.checkValidity()) {
+            form.classList.add('was-validated');
+            return;
+        }
+
+        // Fortschrittsanzeige einblenden
+        const progressBar = document.querySelector('.progress');
+        progressBar.style.display = 'block';
+        const progressBarInner = document.getElementById('progressBar');
+        progressBarInner.style.width = '0%';
+        progressBarInner.setAttribute('aria-valuenow', 0);
+
+        const progressMessage = document.getElementById('progressMessage');
+        progressMessage.style.display = 'block';
+
+        const outputDiv = document.getElementById('output');
+        outputDiv.innerHTML = '';
+
+        const formData = new FormData(form);
+
+        // HF LoRA-Einstellung hinzufügen
+        if (document.getElementById('hf_lora_toggle').checked) {
+            formData.append('hf_lora', 'Scalino84/my-flux-face');
+        } else {
+            formData.delete('hf_lora');
+        }
+
+        // Formulardaten in ein Objekt umwandeln
+        const formObject = Object.fromEntries(formData.entries());
+
+        // WebSocket-Verbindung öffnen
+        const socket = new WebSocket('ws://localhost:8000/ws');
+
+        socket.onopen = function (event) {
+            socket.send(JSON.stringify(formObject));
+        };
+
+        socket.onmessage = function (event) {
+            const data = JSON.parse(event.data);
+            if (data.optimized_prompt) {
+                document.getElementById('prompt').value = data.optimized_prompt;
+            }
+            if (data.progress !== undefined) {
+                progressBarInner.style.width = `${data.progress}%`;
+                progressBarInner.setAttribute('aria-valuenow', data.progress);
+            }
+            if (data.message) {
+                const message = document.createElement('div');
+                message.textContent = data.message;
+                outputDiv.appendChild(message);
+            }
+            if (data.generated_files) {
+                data.generated_files.forEach(file => {
+                    const img = document.createElement('img');
+                    img.src = file;
+                    img.style.maxWidth = '100%';
+                    outputDiv.appendChild(img);
+                    const promptText = document.createElement('p');
+                    promptText.textContent = `Prompt: ${formData.get('prompt')}`;
+                    outputDiv.appendChild(promptText);
+                    const copyButton = document.createElement('button');
+                    copyButton.textContent = 'Prompt Kopieren';
+                    copyButton.className = 'btn btn-secondary mt-2';
+                    copyButton.onclick = function() { copyPrompt(formData.get('prompt')) };
+                    outputDiv.appendChild(copyButton);
+                    outputDiv.appendChild(document.createElement('br'));
+                });
+                // Fortschrittsanzeige ausblenden
+                progressBar.style.display = 'none';
+                progressMessage.style.display = 'none';
+            }
+        };
+
+        socket.onerror = function (event) {
+            console.error('WebSocket error:', event);
+        };
+
+        socket.onclose = function (event) {
+            console.log('WebSocket connection closed:', event);
+        };
+    }
+
+    // Funktion zur Optimierung des Prompts
+    function optimizeOnly() {
+        const form = document.getElementById('generateForm');
+        if (!form.checkValidity()) {
+            form.classList.add('was-validated');
+            return;
+        }
+
+        const formData = new FormData(form);
+
+        // HF LoRA-Einstellung hinzufügen
+        if (document.getElementById('hf_lora_toggle').checked) {
+            formData.append('hf_lora', 'Scalino84/my-flux-face');
+        } else {
+            formData.delete('hf_lora');
+        }
+
+        // Formulardaten in ein Objekt umwandeln
+        const formObject = Object.fromEntries(formData.entries());
+        formObject.optimize_only = true;
+
+        // WebSocket-Verbindung öffnen
+        const socket = new WebSocket('ws://localhost:8000/ws');
+
+        socket.onopen = function (event) {
+            socket.send(JSON.stringify(formObject));
+        };
+
+        socket.onmessage = function (event) {
+            const data = JSON.parse(event.data);
+            if (data.optimized_prompt) {
+                document.getElementById('prompt').value = data.optimized_prompt;
+            }
+        };
+
+        socket.onerror = function (event) {
+            console.error('WebSocket error:', event);
+        };
+
+        socket.onclose = function (event) {
+            console.log('WebSocket connection closed:', event);
+        };
+    }
+
+    function batchOptimize() {
+        // Prompts aus dem Textbereich sammeln
+        const batchPrompts = document.getElementById('batchPrompts').value.split('\n').filter(prompt => prompt.trim() !== '');
+        if (batchPrompts.length === 0) {
+            alert("Bitte geben Sie mindestens einen Prompt ein.");
+            return;
+        }
+
+        // Formulardaten sammeln
+        const formData = new FormData(document.getElementById('generateForm'));
+        const prompts = batchPrompts.map(prompt => {
+            const data = Object.fromEntries(formData);
+            data.prompt = prompt;
+            return data;
+        });
+
+        // Add HF LoRA toggle value to each prompt
+        if (document.getElementById('hf_lora_toggle').checked) {
+            prompts.forEach(prompt => prompt.hf_lora = 'Scalino84/my-flux-face');
+        } else {
+            prompts.forEach(prompt => delete prompt.hf_lora);
+        }
+
+        // WebSocket-Verbindung öffnen
+        const socket = new WebSocket('ws://localhost:8000/ws');
+
+        socket.onopen = function () {
+            // Prompts an den Server senden
+            socket.send(JSON.stringify({ prompts }));
+        };
+
+        socket.onmessage = function (event) {
+            const data = JSON.parse(event.data);
+            if (data.optimized_prompt) {
+                document.getElementById('prompt').value = data.optimized_prompt;
+            }
+            if (data.generated_files) {
+                data.generated_files.forEach(file => {
+                    const livePreviewImage = document.getElementById('livePreviewImage');
+                    if (livePreviewImage) {
+                        livePreviewImage.src = file;
+                    } else {
+                        const img = document.createElement('img');
+                        img.id = 'livePreviewImage';
+                        img.src = file;
+                        img.style.maxWidth = '100%';
+                        document.getElementById('output').appendChild(img);
+                    }
+                });
+            }
+        };
+
+        socket.onerror = function (event) {
+            console.error('WebSocket error:', event);
+            alert('Ein Fehler ist aufgetreten. Bitte versuchen Sie es erneut.');
+        };
+
+        socket.onclose = function (event) {
+            console.log('WebSocket connection closed:', event);
+        };
+    }
+
+    function copyPrompt() {
+        const promptText = document.getElementById('prompt').value;
+        navigator.clipboard.writeText(promptText).then(() => {
+            alert('Prompt in die Zwischenablage kopiert!');
+        }).catch(err => {
+            console.error('Fehler beim Kopieren des Prompts:', err);
+        });
+    }
+</script>
+{% endblock %}

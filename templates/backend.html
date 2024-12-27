@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+
+{% block title %}Backend Verwaltung{% endblock %}
+
+{% block content %}
+<h1>Backend Verwaltung</h1>
+
+<!-- Album- und Kategorieverwaltung -->
+<div class="mb-3">
+    <h2>Alben und Kategorien verwalten</h2>
+    <form action="/create_album" method="post" class="mb-2">
+        <input type="text" name="name" placeholder="Neuer Albumname" required class="form-control mb-2">
+        <button type="submit" class="btn btn-primary">Album erstellen</button>
+    </form>
+    <form action="/create_category" method="post" class="mb-2">
+        <input type="text" name="name" placeholder="Neuer Kategoriename" required class="form-control mb-2">
+        <button type="submit" class="btn btn-primary">Kategorie erstellen</button>
+    </form>
+</div>
+
+<!-- Liste der Alben -->
+<div class="mb-3">
+    <h2>Bestehende Alben</h2>
+    <ul>
+        {% for album in albums %}
+            <li>{{ album[1] }}</li>
+        {% endfor %}
+    </ul>
+</div>
+
+<!-- Liste der Kategorien -->
+<div class="mb-3">
+    <h2>Bestehende Kategorien</h2>
+    <ul>
+        {% for category in categories %}
+            <li>{{ category[1] }}</li>
+        {% endfor %}
+    </ul>
+</div>
+{% endblock %}
