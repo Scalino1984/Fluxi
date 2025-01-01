@@ -3,242 +3,335 @@
 {% block title %}Flux Bildarchiv{% endblock %}
 
 {% block content %}
-<h1>Flux Bildarchiv</h1>
+<div class="main-container" style="width: 88%; margin: auto;">
+    <h1>Flux Bildarchiv</h1>
 
-<!-- Suche -->
-<div class="mb-3 search-container">
-    <form id="searchForm" action="/archive" method="get" class="d-flex flex-column">
-        <div class="mb-3 w-100">
-            <label for="search" class="form-label">Suche:</label>
-            <input type="text" class="form-control" id="search" name="search" value="{{ search_query }}">
-        </div>
-        <div class="d-flex flex-wrap mt-3">
-            <button type="submit" class="btn btn-primary flex-fill" style="width: 33.33%;">Suchen</button>
-            <button type="reset" class="btn btn-secondary flex-fill ms-2" style="width: 33.33%;">Zurücksetzen</button>
-        </div>
-    </form>
-</div>
-
-<!-- Filter Accordion -->
-<div class="accordion" id="filterAccordion">
-    <div class="accordion-item">
-        <h2 class="accordion-header" id="headingOne">
-            <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseOne" aria-expanded="false" aria-controls="collapseOne">
-                Filteroptionen
-            </button>
-        </h2>
-        <div id="collapseOne" class="accordion-collapse collapse" aria-labelledby="headingOne" data-bs-parent="#filterAccordion">
-            <div class="accordion-body">
-                <form id="filterForm" action="/archive" method="get" class="d-flex flex-column flex-md-row flex-wrap">
-                    <div class="mb-3 flex-grow-1 me-md-3">
-                        <label for="date_from" class="form-label">Von Datum:</label>
-                        <input type="date" class="form-control" id="date_from" name="date_from" value="{{ date_from }}">
-                    </div>
-                    <div class="mb-3 flex-grow-1 me-md-3">
-                        <label for="date_to" class="form-label">Bis Datum:</label>
-                        <input type="date" class="form-control" id="date_to" name="date_to" value="{{ date_to }}">
-                    </div>
-                    <div class="mb-3 flex-grow-1 me-md-3">
-                        <label for="album_filter" class="form-label">Album:</label>
-                        <select class="form-control" id="album_filter" name="album">
-                            <option value="">Alle</option>
-                            {% for album in albums %}
-                                <option value="{{ album[0] }}" {% if album[0] == selected_album %}selected{% endif %}>{{ album[1] }}</option>
-                            {% endfor %}
-                        </select>
-                    </div>
-                    <div class="mb-3 flex-grow-1 me-md-3">
-                        <label for="category_filter" class="form-label">Kategorie:</label>
-                        <select class="form-control" id="category_filter" name="category" multiple>
-                            <option value="">Alle</option>
-                            {% for category in categories %}
-                                <option value="{{ category[0] }}" {% if category[0] in selected_categories %}selected{% endif %}>{{ category[1] }}</option>
-                            {% endfor %}
-                        </select>
-                    </div>
-                    <div class="mb-3 flex-grow-1 me-md-3">
-                        <label for="size_filter" class="form-label">Bildgröße:</label>
-                        <select class="form-control" id="size_filter" name="size">
-                            <option value="">Alle</option>
-                            <option value="small" {% if size == 'small' %}selected{% endif %}>Klein</option>
-                            <option value="medium" {% if size == 'medium' %}selected{% endif %}>Mittel</option>
-                            <option value="large" {% if size == 'large' %}selected{% endif %}>Groß</option>
-                        </select>
-                    </div>
-                    <div class="mb-3 flex-grow-1">
-                        <label for="month_filter" class="form-label">Monat:</label>
-                        <select class="form-control" id="month_filter" name="month">
-                            <option value="">Alle</option>
-                            {% for month in months %}
-                                <option value="{{ month }}" {% if month == selected_month %}selected{% endif %}>{{ month }}</option>
-                            {% endfor %}
-                        </select>
-                    </div>
-                    <div class="mb-3 flex-grow-1">
-                        <label for="items_per_page" class="form-label">Bilder pro Seite:</label>
-                        <select class="form-control" id="items_per_page" name="items_per_page">
-                            <option value="15" {% if items_per_page == 15 %}selected{% endif %}>15</option>
-                            <option value="30" {% if items_per_page == 30 %}selected{% endif %}>30</option>
-                            <option value="50" {% if items_per_page == 50 %}selected{% endif %}>50</option>
-                            <option value="75" {% if items_per_page == 75 %}selected{% endif %}>75</option>
-                            <option value="100" {% if items_per_page == 100 %}selected{% endif %}>100</option>
-                        </select>
-                    </div>
-                    <input type="hidden" name="page" value="{{ page }}" />
-                    <div class="d-flex flex-wrap mt-3">
-                        <button type="submit" class="btn btn-primary flex-fill" style="width: 33.34%;">Filtern</button>
-                    </div>
-                </form>
+    <!-- Suche -->
+    <div class="mb-3 search-container">
+        <form id="searchForm" action="/archive" method="get" class="d-flex flex-column">
+            <div class="mb-3 w-100">
+                <label for="search" class="form-label">Suche:</label>
+                <input type="text" class="form-control" id="search" name="search" value="{{ search_query }}">
             </div>
-        </div>
+            <div class="d-flex flex-wrap mt-3">
+                <button type="submit" class="btn btn-primary flex-fill" style="width: 33.33%;">Suchen</button>
+                <button type="reset" class="btn btn-secondary flex-fill ms-2" style="width: 33.33%;">Zurücksetzen</button>
+            </div>
+        </form>
     </div>
-</div>
 
-<!-- Archiv Anzeige -->
-<div id="archive" class="container-fluid">
-    <!-- Optionen für Alle auswählen und Bearbeitung -->
-    <div class="d-flex justify-content-between align-items-center mb-2">
-        <div>
-            <input type="checkbox" id="selectAll" /> Alle auswählen
-        </div>
-        <div class="d-flex align-items-center">
-            <button id="thumbgalleryBtn" class="btn btn-secondary me-2">Thumbgallery</button>
-            <button id="slideshowBtn" class="btn btn-secondary me-2">Slideshow</button>
-            <select id="gridLayout" class="form-select me-2" style="width: auto;">
-                <option value="2">2 nebeneinander</option>
-                <option value="3">3 nebeneinander</option>
-                <option value="4">4 nebeneinander</option>
-                <option value="5">5 nebeneinander</option>
-                <option value="6">6 nebeneinander</option>
-            </select>
-            <div class="dropdown">
-                <button class="btn btn-secondary dropdown-toggle" type="button" id="actionMenu" data-bs-toggle="dropdown" aria-expanded="false">
-                    Optionen
+    <!-- Menübuttons -->
+    <div class="nav-buttons d-flex flex-wrap justify-content-between gap-2 mb-3">
+        <a href="/" class="btn btn-primary flex-fill text-center">Home</a>
+        <a href="/archive" class="btn btn-secondary flex-fill text-center">Archiv</a>
+        <a href="/backend" class="btn btn-secondary flex-fill text-center">Backend</a>
+    </div>
+
+    <!-- Filter Accordion -->
+    <div class="accordion" id="filterAccordion">
+        <div class="accordion-item">
+            <h2 class="accordion-header" id="headingOne">
+                <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseOne" aria-expanded="false" aria-controls="collapseOne">
+                    Filteroptionen
                 </button>
-                <ul class="dropdown-menu" aria-labelledby="actionMenu">
-                    <li><a class="dropdown-item" href="#" id="deleteSelected">Löschen</a></li>
-                    <li><a class="dropdown-item" href="#" id="addToCategory">Zu Kategorie hinzufügen</a></li>
-                    <li><a class="dropdown-item" href="#" id="addToAlbum">Zu Album hinzufügen</a></li>
-                    <li><a class="dropdown-item" href="#" id="downloadSelected">Aktuelle Auswahl downloaden</a></li>
-                </ul>
-            </div>
-        </div>
-    </div>
-
-    <div class="row" id="imageGrid">
-        {% for log in logs %}
-            <div class="col-12 col-md-6 col-lg-4 col-xl-3 col-xxl-2">
-                <div class="card mb-3 custom-bg">
-                    <div class="card-body p-0 position-relative">
-                        <!-- Bild anzeigen -->
-                        <img src="{{ log.output_file }}" class="img-fluid image-thumbnail" alt="Generiertes Bild" data-id="{{ log.id }}" data-filename="{{ log.output_file.split('/')[-1] }}" data-format="{{ log.output_file.split('.')[-1] }}" data-timestamp="{{ log.timestamp }}" data-album="{{ log.album }}" data-category="{{ log.category }}" data-prompt="{{ log.prompt }}" data-optimized_prompt="{{ log.optimized_prompt }}">
-                        <!-- Checkbox im Bild oben rechts -->
-                        <input type="checkbox" class="form-check-input select-item position-absolute top-0 end-0 m-2">
-                    </div>
+            </h2>
+            <div id="collapseOne" class="accordion-collapse collapse" aria-labelledby="headingOne" data-bs-parent="#filterAccordion">
+                <div class="accordion-body">
+                    <form id="filterForm" action="/archive" method="get" class="d-flex flex-column flex-md-row flex-wrap">
+                        <div class="mb-3 flex-grow-1 me-md-3">
+                            <label for="date_from" class="form-label">Von Datum:</label>
+                            <input type="date" class="form-control" id="date_from" name="date_from" value="{{ date_from }}">
+                        </div>
+                        <div class="mb-3 flex-grow-1 me-md-3">
+                            <label for="date_to" class="form-label">Bis Datum:</label>
+                            <input type="date" class="form-control" id="date_to" name="date_to" value="{{ date_to }}">
+                        </div>
+                        <div class="mb-3 flex-grow-1 me-md-3">
+                            <label for="album_filter" class="form-label">Album:</label>
+                            <select class="form-control" id="album_filter" name="album">
+                                <option value="">Alle</option>
+                                {% for album in albums %}
+                                    <option value="{{ album[0] }}" {% if album[0] == selected_album %}selected{% endif %}>{{ album[1] }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="mb-3 flex-grow-1 me-md-3">
+                            <label for="category_filter" class="form-label">Kategorie:</label>
+                            <select class="form-control" id="category_filter" name="category" multiple>
+                                <option value="">Alle</option>
+                                {% for category in categories %}
+                                    <option value="{{ category[0] }}" {% if category[0] in selected_categories %}selected{% endif %}>{{ category[1] }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="mb-3 flex-grow-1 me-md-3">
+                            <label for="size_filter" class="form-label">Bildgröße:</label>
+                            <select class="form-control" id="size_filter" name="size">
+                                <option value="">Alle</option>
+                                <option value="small" {% if size == 'small' %}selected{% endif %}>Klein</option>
+                                <option value="medium" {% if size == 'medium' %}selected{% endif %}>Mittel</option>
+                                <option value="large" {% if size == 'large' %}selected{% endif %}>Groß</option>
+                            </select>
+                        </div>
+                        <div class="mb-3 flex-grow-1">
+                            <label for="month_filter" class="form-label">Monat:</label>
+                            <select class="form-control" id="month_filter" name="month">
+                                <option value="">Alle</option>
+                                {% for month in months %}
+                                    <option value="{{ month }}" {% if month == selected_month %}selected{% endif %}>{{ month }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="mb-3 flex-grow-1">
+                            <label for="items_per_page" class="form-label">Bilder pro Seite:</label>
+                            <select class="form-control" id="items_per_page" name="items_per_page">
+                                <option value="15" {% if items_per_page == 15 %}selected{% endif %}>15</option>
+                                <option value="30" {% if items_per_page == 30 %}selected{% endif %}>30</option>
+                                <option value="50" {% if items_per_page == 50 %}selected{% endif %}>50</option>
+                                <option value="75" {% if items_per_page == 75 %}selected{% endif %}>75</option>
+                                <option value="100" {% if items_per_page == 100 %}selected{% endif %}>100</option>
+                            </select>
+                        </div>
+                        <input type="hidden" name="page" value="{{ page }}" />
+                        <div class="d-flex flex-wrap mt-3">
+                            <button type="submit" class="btn btn-primary flex-fill" style="width: 33.34%;">Filtern</button>
+                        </div>
+                    </form>
                 </div>
             </div>
-        {% endfor %}
-    </div>
-</div>
-
-<!-- Paginierung -->
-<div class="d-flex justify-content-center mt-4">
-    {% if page > 1 %}
-        <a class="btn btn-secondary me-2" href="?page={{ page - 1 }}&items_per_page={{ items_per_page }}{% if search_query %}&search={{ search_query }}{% endif %}{% if selected_album %}&album={{ selected_album }}{% endif %}{% if selected_categories %}&category={{ selected_categories | join(',') }}{% endif %}">Vorherige</a>
-    {% endif %}
-    {% if logs|length == items_per_page %}
-        <a class="btn btn-secondary" href="?page={{ page + 1 }}&items_per_page={{ items_per_page }}{% if search_query %}&search={{ search_query }}{% endif %}{% if selected_album %}&album={{ selected_album }}{% endif %}{% if selected_categories %}&category={{ selected_categories | join(',') }}{% endif %}">Nächste</a>
-    {% endif %}
-</div>
-
-<!-- "Nach oben"-Button -->
-<button id="scrollTopBtn" class="btn btn-primary" style="display: none; position: fixed; bottom: 20px; right: 20px; width: 100px; z-index: 99;">
-    Nach oben
-</button>
-
-<!-- Popup Modal -->
-<div id="imageModal" class="modal fade" tabindex="-1" aria-labelledby="imageModalLabel" aria-hidden="true">
-    <div class="modal-dialog modal-lg">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title" id="imageModalLabel">Bilddetails</h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Schließen"></button>
-            </div>
-            <div class="modal-body">
-                <img id="modalImage" src="" class="img-fluid mb-3" alt="Bild">
-                <p><strong>Dateiname:</strong> <span id="modalFilename"></span></p>
-                <p><strong>Bildformat:</strong> <span id="modalFormat"></span></p>
-                <p><strong>Datum:</strong> <span id="modalTimestamp"></span></p>
-                <p><strong>Album:</strong> <span id="modalAlbum"></span></p>
-                <p><strong>Kategorie:</strong> <span id="modalCategory"></span></p>
-                <p><strong>Eingabeaufforderung:</strong> <span id="modalPrompt"></span></p>
-                <p><strong>Optimierte Eingabeaufforderung:</strong> <span id="modalOptimizedPrompt"></span></p>
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Schließen</button>
-            </div>
         </div>
     </div>
-</div>
 
-<!-- Modal für Zuweisung zu Album -->
-<div id="assignAlbumModal" class="modal fade" tabindex="-1" aria-labelledby="assignAlbumModalLabel" aria-hidden="true">
-    <div class="modal-dialog modal-lg">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title" id="assignAlbumModalLabel">Zu Album hinzufügen</h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Schließen"></button>
+    <!-- Archiv Anzeige -->
+    <div id="archive" class="container-fluid">
+        <!-- Optionen für Alle auswählen und Bearbeitung -->
+        <div class="d-flex justify-content-between align-items-center mb-2">
+            <div>
+                <input type="checkbox" id="selectAll" /> Alle auswählen
             </div>
-            <div class="modal-body">
-                <form id="assignAlbumForm">
-                    <div class="mb-3">
-                        <label for="albumSelect" class="form-label">Album auswählen:</label>
-                        <select class="form-control" id="albumSelect" name="album">
-                            {% for album in albums %}
-                                <option value="{{ album[0] }}">{{ album[1] }}</option>
-                            {% endfor %}
-                        </select>
+            <div class="d-flex align-items-center">
+                <button id="thumbgalleryBtn" class="btn btn-secondary me-2">Thumbgallery</button>
+                <button id="slideshowBtn" class="btn btn-secondary me-2">Slideshow</button>
+                <select id="gridLayout" class="form-select me-2" style="width: auto;">
+                    <option value="2">2 nebeneinander</option>
+                    <option value="3">3 nebeneinander</option>
+                    <option value="4">4 nebeneinander</option>
+                    <option value="5">5 nebeneinander</option>
+                    <option value="6">6 nebeneinander</option>
+                </select>
+                <div class="dropdown">
+                    <button class="btn btn-secondary dropdown-toggle" type="button" id="actionMenu" data-bs-toggle="dropdown" aria-expanded="false">
+                        Optionen
+                    </button>
+                    <ul class="dropdown-menu" aria-labelledby="actionMenu">
+                        <li><a class="dropdown-item" href="#" id="deleteSelected">Löschen</a></li>
+                        <li><a class="dropdown-item" href="#" id="addToCategory">Zu Kategorie hinzufügen</a></li>
+                        <li><a class="dropdown-item" href="#" id="addToAlbum">Zu Album hinzufügen</a></li>
+                        <li><a class="dropdown-item" href="#" id="downloadSelected">Aktuelle Auswahl downloaden</a></li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+
+        <div class="row" id="imageGrid">
+            {% for log in logs %}
+                <div class="col-12 col-md-6 col-lg-4 col-xl-3 col-xxl-2">
+                    <div class="card mb-3 custom-bg">
+                        <div class="card-body p-0 position-relative">
+                            <!-- Bild anzeigen -->
+                            <img src="{{ log.output_file }}" class="img-fluid image-thumbnail" alt="Generiertes Bild" data-id="{{ log.id }}" data-filename="{{ log.output_file.split('/')[-1] }}" data-format="{{ log.output_file.split('.')[-1] }}" data-timestamp="{{ log.timestamp }}" data-album="{{ log.album }}" data-category="{{ log.category }}" data-prompt="{{ log.prompt }}" data-optimized_prompt="{{ log.optimized_prompt }}">
+                            <!-- Checkbox im Bild oben rechts -->
+                            <input type="checkbox" class="form-check-input select-item position-absolute top-0 end-0 m-2">
+                        </div>
                     </div>
-                </form>
+                </div>
+            {% endfor %}
+        </div>
+    </div>
+
+    <!-- Paginierung -->
+    <div class="d-flex justify-content-center mt-4">
+        {% if page > 1 %}
+            <a class="btn btn-secondary me-2" href="?page={{ page - 1 }}&items_per_page={{ items_per_page }}{% if search_query %}&search={{ search_query }}{% endif %}{% if selected_album %}&album={{ selected_album }}{% endif %}{% if selected_categories %}&category={{ selected_categories | join(',') }}{% endif %}">Vorherige Seite</a>
+        {% endif %}
+        {% if logs|length == items_per_page %}
+            <a class="btn btn-secondary" href="?page={{ page + 1 }}&items_per_page={{ items_per_page }}{% if search_query %}&search={{ search_query }}{% endif %}{% if selected_album %}&album={{ selected_album }}{% endif %}{% if selected_categories %}&category={{ selected_categories | join(',') }}{% endif %}">Nächste Seite</a>
+        {% endif %}
+    </div>
+
+    <!-- "Nach oben"-Button -->
+    <button id="scrollTopBtn" class="btn btn-primary" style="display: none; position: fixed; bottom: 20px; right: 20px; width: 100px; z-index: 99;">
+        Nach oben
+    </button>
+
+    <!-- Popup Modal -->
+    <div id="imageModal" class="modal fade" tabindex="-1" aria-labelledby="imageModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="imageModalLabel">Bilddetails</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Schließen"></button>
+                </div>
+                <div class="modal-body">
+                    <img id="modalImage" src="" class="img-fluid mb-3" alt="Bild">
+                    <p><strong>Dateiname:</strong> <span id="modalFilename"></span></p>
+                    <p><strong>Bildformat:</strong> <span id="modalFormat"></span></p>
+                    <p><strong>Datum:</strong> <span id="modalTimestamp"></span></p>
+                    <p><strong>Album:</strong> <span id="modalAlbum"></span></p>
+                    <p><strong>Kategorie:</strong> <span id="modalCategory"></span></p>
+                    <p><strong>Eingabeaufforderung:</strong> <span id="modalPrompt"></span></p>
+                    <p><strong>Optimierte Eingabeaufforderung:</strong> <span id="modalOptimizedPrompt"></span></p>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Schließen</button>
+                </div>
             </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Abbrechen</button>
-                <button type="button" class="btn btn-primary" id="assignAlbumBtn">Hinzufügen</button>
+        </div>
+    </div>
+
+    <!-- Modal für Zuweisung zu Album -->
+    <div id="assignAlbumModal" class="modal fade" tabindex="-1" aria-labelledby="assignAlbumModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="assignAlbumModalLabel">Zu Album hinzufügen</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Schließen"></button>
+                </div>
+                <div class="modal-body">
+                    <form id="assignAlbumForm">
+                        <div class="mb-3">
+                            <label for="albumSelect" class="form-label">Album auswählen:</label>
+                            <select class="form-control" id="albumSelect" name="album">
+                                {% for album in albums %}
+                                    <option value="{{ album[0] }}">{{ album[1] }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Abbrechen</button>
+                    <button type="button" class="btn btn-primary" id="assignAlbumBtn">Hinzufügen</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal für Zuweisung zu Kategorie -->
+    <div id="assignCategoryModal" class="modal fade" tabindex="-1" aria-labelledby="assignCategoryModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="assignCategoryModalLabel">Zu Kategorie hinzufügen</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Schließen"></button>
+                </div>
+                <div class="modal-body">
+                    <form id="assignCategoryForm">
+                        <div class="mb-3">
+                            <label for="categorySelect" class="form-label">Kategorien auswählen:</label>
+                            <select class="form-control" id="categorySelect" name="category" multiple>
+                                {% for category in categories %}
+                                    <option value="{{ category[0] }}">{{ category[1] }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Abbrechen</button>
+                    <button type="button" class="btn btn-primary" id="assignCategoryBtn">Hinzufügen</button>
+                </div>
             </div>
         </div>
     </div>
 </div>
 
-<!-- Modal für Zuweisung zu Kategorie -->
-<div id="assignCategoryModal" class="modal fade" tabindex="-1" aria-labelledby="assignCategoryModalLabel" aria-hidden="true">
-    <div class="modal-dialog modal-lg">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title" id="assignCategoryModalLabel">Zu Kategorie hinzufügen</h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Schließen"></button>
-            </div>
-            <div class="modal-body">
-                <form id="assignCategoryForm">
-                    <div class="mb-3">
-                        <label for="categorySelect" class="form-label">Kategorien auswählen:</label>
-                        <select class="form-control" id="categorySelect" name="category" multiple>
-                            {% for category in categories %}
-                                <option value="{{ category[0] }}">{{ category[1] }}</option>
-                            {% endfor %}
-                        </select>
-                    </div>
-                </form>
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Abbrechen</button>
-                <button type="button" class="btn btn-primary" id="assignCategoryBtn">Hinzufügen</button>
-            </div>
-        </div>
-    </div>
-</div>
+<!-- CSS Styles -->
+<style>
+.image-container {
+   position: relative;
+   text-align: center;
+   max-height: 80vh;
+   overflow: auto;
+}
 
+.image-container img {
+   max-width: 100%;
+   height: auto;
+   transition: transform 0.2s;
+}
+
+.image-container img:hover {
+   transform: scale(1.02);
+}
+
+.thumb-container {
+   position: relative;
+   display: inline-block;
+}
+
+.download-thumb {
+   position: absolute;
+   bottom: 5px;
+   right: 5px;
+   opacity: 0;
+   transition: opacity 0.3s;
+}
+
+.thumb-container:hover .download-thumb {
+   opacity: 1;
+}
+
+.carousel-item img {
+   max-height: 80vh;
+   object-fit: contain;
+}
+
+#slideshowModal.fullscreen .modal-dialog {
+   max-width: 100%;
+   margin: 0;
+   height: 100vh;
+}
+
+#slideshowModal.fullscreen .modal-content {
+   height: 100%;
+   border: none;
+   border-radius: 0;
+}
+
+.carousel-control-prev,
+.carousel-control-next {
+   width: 10%;
+   opacity: 0;
+   transition: opacity 0.3s;
+}
+
+.carousel:hover .carousel-control-prev,
+.carousel:hover .carousel-control-next {
+   opacity: 0.5;
+}
+
+.modal-dialog {
+   max-width: 90vw;
+   margin: 1.75rem auto;
+}
+
+.image-details {
+   margin-top: 1rem;
+   padding: 1rem;
+   background-color: rgba(0,0,0,0.02);
+   border-radius: 4px;
+}
+
+.modal-footer {
+   justify-content: space-between;
+}
+</style>
+<!-- {% block scripts %}
+<script src="/static/script.js"></script>
+{% endblock %} -->
 <script>
-    document.addEventListener('DOMContentLoaded', function () {
+document.addEventListener('DOMContentLoaded', function () {
         // Event listener für das Zuweisen zu einem Album
         document.getElementById('assignAlbumBtn').addEventListener('click', async function () {
             const albumId = document.getElementById('albumSelect').value;
@@ -294,6 +387,283 @@
             });
             return selectedImages;
         }
+    // Hilfsfunktion für Einzelbild-Download
+    async function downloadSingleImage(filename) {
+        try {
+            const response = await fetch(`/flux-pics/${filename}`);
+            if (!response.ok) {
+                const errorText = await response.text();
+                console.error('Server Error:', errorText);
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            const blob = await response.blob();
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.style.display = 'none';
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            window.URL.revokeObjectURL(url);
+        } catch (error) {
+            console.error('Fehler beim Download:', error);
+            alert('Ein Fehler ist aufgetreten: ' + error.message);
+        }
+    }
+
+    // Function to open modal with image details
+    function openImageModal(img) {
+        const modal = new bootstrap.Modal(document.getElementById('imageModal'));
+        const modalImg = document.getElementById('modalImage');
+        const filename = img.dataset.filename;
+
+        modalImg.src = img.src;
+        document.getElementById('modalFilename').textContent = filename;
+        document.getElementById('modalFormat').textContent = img.dataset.format;
+        document.getElementById('modalTimestamp').textContent = img.dataset.timestamp;
+        document.getElementById('modalAlbum').textContent = img.dataset.album;
+        document.getElementById('modalCategory').textContent = img.dataset.category;
+        document.getElementById('modalPrompt').textContent = img.dataset.prompt;
+        document.getElementById('modalOptimizedPrompt').textContent = img.dataset.optimized_prompt;
+
+        // Click-to-Close Funktionalität
+        document.querySelector('.image-container').onclick = function(e) {
+            if (e.target === modalImg) {
+                modal.hide();
+            }
+        };
+
+        // Download-Button Funktionalität
+        document.getElementById('modalDownloadBtn').onclick = async function() {
+            await downloadSingleImage(filename);
+        };
+
+        modal.show();
+    }
+
+    // Event listener for image click
+    document.querySelectorAll('.image-thumbnail').forEach(function(img) {
+        img.addEventListener('click', function() {
+            openImageModal(this);
+        });
     });
+
+    // Überarbeitete getSelectedImages Funktion
+    function getSelectedImages() {
+        const selectedImages = [];
+        const checkboxes = document.querySelectorAll('.select-item:checked');
+        console.log(`Found ${checkboxes.length} selected images`);
+        
+        checkboxes.forEach(checkbox => {
+            const img = checkbox.closest('.card').querySelector('img');
+            if (img && img.getAttribute('data-filename')) {
+                selectedImages.push(img.getAttribute('data-filename'));
+            } else {
+                console.warn('Missing image or filename for selected checkbox');
+            }
+        });
+        return selectedImages;
+    }
+
+    // "Alle auswählen" Checkbox-Logik
+    const selectAllCheckbox = document.getElementById('selectAll');
+    const itemCheckboxes = document.querySelectorAll('.select-item');
+
+    selectAllCheckbox.addEventListener('change', function () {
+        itemCheckboxes.forEach(checkbox => {
+            checkbox.checked = selectAllCheckbox.checked;
+        });
+    });
+
+    // Download ausgewählter Bilder
+    document.getElementById('downloadSelected').addEventListener('click', async function () {
+        const selectedImages = getSelectedImages();
+        console.log('Selected images:', selectedImages);
+
+        if (selectedImages.length === 0) {
+            alert('Keine Bilder ausgewählt.');
+            return;
+        }
+
+        let downloadType = 'single';
+        if (selectedImages.length > 1) {
+            const choice = confirm('Möchten Sie die Bilder als ZIP-Datei herunterladen?\nKlicken Sie "OK" für ZIP oder "Abbrechen" für Einzeldownloads.');
+            if (choice) {
+                downloadType = 'zip';
+            }
+        }
+
+        try {
+            if (downloadType === 'zip') {
+                const response = await fetch('/flux-pics', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ selectedImages })
+                });
+
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    console.error('Server Error:', errorText);
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
+                const blob = await response.blob();
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.style.display = 'none';
+                a.href = url;
+                a.download = 'images.zip';
+                document.body.appendChild(a);
+                a.click();
+                window.URL.revokeObjectURL(url);
+            } else {
+                for (const filename of selectedImages) {
+                    await downloadSingleImage(filename);
+                    await new Promise(resolve => setTimeout(resolve, 500));
+                }
+            }
+            alert('Download erfolgreich abgeschlossen.');
+        } catch (error) {
+            console.error('Fehler beim Downloaden:', error);
+            alert('Ein Fehler ist aufgetreten: ' + error.message);
+        }
+    });
+
+    // Thumbnail-Galerie
+    document.getElementById('thumbgalleryBtn').addEventListener('click', function () {
+        const selectedImages = getSelectedImages();
+        if (selectedImages.length === 0) {
+            alert('Keine Bilder ausgewählt.');
+            return;
+        }
+
+        const galleryModal = new bootstrap.Modal(document.getElementById('thumbGalleryModal'));
+        const galleryContainer = document.getElementById('thumbGalleryContainer');
+        galleryContainer.innerHTML = '';
+
+        selectedImages.forEach(filename => {
+            const container = document.createElement('div');
+            container.className = 'thumb-container m-2';
+            
+            const img = document.createElement('img');
+            img.src = `/flux-pics/${filename}`;
+            img.className = 'img-thumbnail thumbnail-img';
+            img.dataset.filename = filename;
+            img.style.maxWidth = '150px';
+            img.style.cursor = 'pointer';
+            
+            const downloadBtn = document.createElement('button');
+            downloadBtn.className = 'btn btn-sm btn-primary download-thumb';
+            downloadBtn.innerHTML = '<i class="fas fa-download"></i>';
+            
+            container.appendChild(img);
+            container.appendChild(downloadBtn);
+            galleryContainer.appendChild(container);
+
+            img.addEventListener('click', () => openImageModal(img));
+            downloadBtn.addEventListener('click', async () => {
+                await downloadSingleImage(filename);
+            });
+        });
+
+        galleryModal.show();
+    });
+
+    // Slideshow
+    document.getElementById('slideshowBtn').addEventListener('click', function () {
+        const selectedImages = getSelectedImages();
+        if (selectedImages.length === 0) {
+            alert('Keine Bilder ausgewählt.');
+            return;
+        }
+
+        const slideshowModal = new bootstrap.Modal(document.getElementById('slideshowModal'));
+        const slideshowContainer = document.getElementById('slideshowContainer');
+        slideshowContainer.innerHTML = '';
+        
+        let slideshowInterval;
+        const slideInterval = 5000; // 5 Sekunden pro Bild
+
+        selectedImages.forEach((filename, index) => {
+            const div = document.createElement('div');
+            div.classList.add('carousel-item');
+            if (index === 0) div.classList.add('active');
+
+            const img = document.createElement('img');
+            img.src = `/flux-pics/${filename}`;
+            img.classList.add('d-block', 'w-100');
+            img.dataset.filename = filename;
+            
+            div.appendChild(img);
+            slideshowContainer.appendChild(div);
+        });
+
+        const carousel = new bootstrap.Carousel(document.getElementById('carouselExampleControls'), {
+            interval: false
+        });
+
+        // Play/Pause Funktionalität
+        const playBtn = document.getElementById('playSlideshow');
+        const pauseBtn = document.getElementById('pauseSlideshow');
+
+        playBtn.addEventListener('click', function() {
+            slideshowInterval = setInterval(() => {
+                carousel.next();
+            }, slideInterval);
+            playBtn.style.display = 'none';
+            pauseBtn.style.display = 'block';
+        });
+
+        pauseBtn.addEventListener('click', function() {
+            clearInterval(slideshowInterval);
+            pauseBtn.style.display = 'none';
+            playBtn.style.display = 'block';
+        });
+
+        // Vollbild Funktionalität
+        document.getElementById('fullscreenBtn').addEventListener('click', function() {
+            const modalElement = document.getElementById('slideshowModal');
+            if (modalElement.requestFullscreen) {
+                modalElement.requestFullscreen();
+            } else if (modalElement.webkitRequestFullscreen) {
+                modalElement.webkitRequestFullscreen();
+            } else if (modalElement.msRequestFullscreen) {
+                modalElement.msRequestFullscreen();
+            }
+        });
+
+        // Download aktuelles Bild
+        document.getElementById('downloadCurrentSlide').addEventListener('click', async function() {
+            const activeSlide = slideshowContainer.querySelector('.carousel-item.active img');
+            if (activeSlide) {
+                await downloadSingleImage(activeSlide.dataset.filename);
+            }
+        });
+
+        slideshowModal.show();
+    });
+
+    // Grid Layout
+    document.getElementById('gridLayout').addEventListener('change', function () {
+        const columns = parseInt(this.value);
+        const imageGrid = document.getElementById('imageGrid');
+        imageGrid.className = `row row-cols-1 row-cols-md-${columns}`;
+    });
+
+    // Nach oben Button
+    const scrollTopBtn = document.getElementById('scrollTopBtn');
+    window.addEventListener('scroll', function () {
+        if (window.scrollY > 300) {
+            scrollTopBtn.style.display = 'block';
+        } else {
+            scrollTopBtn.style.display = 'none';
+        }
+    });
+
+    scrollTopBtn.addEventListener('click', function () {
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+    });
+});
 </script>
+
 {% endblock %}
