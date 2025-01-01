@@ -3,7 +3,8 @@
 {% block title %}Flux Image Generator - Home{% endblock %}
 
 {% block content %}
-<h1>Flux Image Generator</h1>
+<!-- <h1>Flux Image Generator</h1> -->
+
 <form id="generateForm" class="needs-validation custom-bg p-3 rounded" novalidate>
     <!-- Prompt-Eingabe -->
     <div class="mb-3">
@@ -11,6 +12,15 @@
         <textarea class="form-control" id="prompt" name="prompt" rows="4" required></textarea>
         <div class="invalid-feedback">Bitte geben Sie einen Prompt ein.</div>
     </div>
+    <!-- Fortschrittsanzeige -->
+    <div class="progress mb-3" id="progressContainer" style="display: none;">
+        <div id="progressBar" class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar" style="width: 0%;" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"></div>
+    </div>
+
+    <!-- Fortschrittsnachricht -->
+	<div id="progressMessage" class="mb-3 blink-text" style="display: none;">
+		<p></h4>Generiere Bilder, bitte warten...</h4></p>
+	</div>
     <!-- Album-Auswahl -->
     <div class="mb-3">
         <label for="album_id" class="form-label">Album:</label>
@@ -31,21 +41,18 @@
             {% endfor %}
         </datalist>
     </div>
-    <!-- Buttons zur Generierung und Optimierung -->
+	<div class="btn-group d-flex flex-wrap">
+		<button type="button" class="btn btn-primary flex-fill mb-3" onclick="startGeneration()">ERSTELLEN</button>
+		<button type="button" class="btn btn-secondary flex-fill mb-3" onclick="optimizeOnly()">OPTIMIEREN</button>
+		<button type="button" class="btn btn-secondary flex-fill mb-3" onclick="copyPrompt()">ZURÜCKSETZEN</button>
+	</div>
+
+    <!-- 
+	Buttons zur Generierung und Optimierung 
     <button type="button" class="btn btn-primary mb-3" onclick="startGeneration()">Bild Generieren</button>
     <button type="button" class="btn btn-secondary mb-3" onclick="optimizeOnly()">Nur Optimieren</button>
     <button type="button" class="btn btn-secondary mb-3" onclick="copyPrompt()">Prompt Kopieren</button>
-
-    <!-- Fortschrittsanzeige -->
-    <div class="progress mb-3" style="display: none;">
-        <div id="progressBar" class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar" style="width: 0%;" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"></div>
-    </div>
-
-    <!-- Fortschrittsnachricht -->
-    <div id="progressMessage" class="mb-3" style="display: none;">
-        <p>Generiere Bilder, bitte warten...</p>
-    </div>
-
+	-->
     <!-- Erweiterte Einstellungen -->
     <div class="accordion" id="advancedSettingsAccordion">
         <div class="accordion-item custom-bg">
@@ -59,7 +66,7 @@
                     <div class="row g-3">
                         <div class="col-12 col-md-6">
                             <label for="num_outputs" class="form-label">Anzahl der Ausgaben:</label>
-                            <select class="form-control" id="num_outputs" name="num_outputs">
+                            <select class="form-select" id="num_outputs" name="num_outputs">
                                 <option value="1">1</option>
                                 <option value="2">2</option>
                                 <option value="3">3</option>
@@ -68,7 +75,7 @@
                         </div>
                         <div class="col-12 col-md-6">
                             <label for="aspect_ratio" class="form-label">Seitenverhältnis:</label>
-                            <select class="form-control" id="aspect_ratio" name="aspect_ratio">
+                            <select class="form-select" id="aspect_ratio" name="aspect_ratio">
                                 <option value="1:1">1:1</option>
                                 <option value="16:9">16:9</option>
                                 <option value="21:9">21:9</option>
@@ -84,7 +91,7 @@
                         </div>
                         <div class="col-12 col-md-6">
                             <label for="output_format" class="form-label">Ausgabeformat:</label>
-                            <select class="form-control" id="output_format" name="output_format">
+                            <select class="form-select" id="output_format" name="output_format">
                                 <option value="png">PNG</option>
                                 <option value="jpg">JPG</option>
                                 <option value="webp">WEBP</option>
@@ -110,16 +117,21 @@
                             <label for="lora_scale" class="form-label">LoRA Scale:</label>
                             <input type="number" step="0.1" class="form-control" id="lora_scale" name="lora_scale" value="0.8">
                         </div>
-                        <div class="col-12 col-md-6 d-flex align-items-center">
-                            <div class="form-switch mb-3">
-                                <input class="form-check-input" type="checkbox" id="hf_lora_toggle" name="hf_lora_toggle" checked>
-                                <label class="form-check-label" for="hf_lora_toggle">HF LoRA verwenden</label>
-                            </div>
-                            <div class="form-switch mb-3 ms-3">
-                                <input class="form-check-input" type="checkbox" id="agent" name="agent" checked>
-                                <label class="form-check-label" for="agent">Mistral Agent verwenden</label>
-                            </div>
+<!--                        <div class="col-12 col-md-6 d-flex align-items-center"> 
+                        <div class="col-12 col-md-6">
+                            <input class="form-check-input" type="checkbox" id="hf_lora_toggle" name="hf_lora_toggle" checked>
+                            <label class="form-check-label" for="hf_lora_toggle">HF LoRA verwenden</label>
+                        </div> -->
+						
+						<div class="col-12 col-md-6">
+							<label class="form-check-label" for="hf_lora_toggle">HF LoRA verwenden:</label>
+							<input class="form-control" type="text" id="hf_lora_toggle" name="hf_lora_toggle" value="Scalino84/my-flux-face">
+						</div>
+                        <div class="col-12 col-md-6">
+                            <label class="form-check-label" for="agent">Mistral Agent verwenden:</label>
+                            <input class="form-check-input" type="checkbox" id="agent" name="agent" checked>
                         </div>
+<!--                        </div> -->
                     </div>
                 </div>
             </div>
@@ -140,6 +152,11 @@
                     <button type="button" class="btn btn-primary mt-2" onclick="batchOptimize()">Batch Optimieren</button>
                 </div>
             </div>
+			    <!-- Bildausgabebereich -->
+			<div id="output" class="mt-4 p-2 border rounded bg-light">
+				<!--<h5>Generierte Bilder:</h5>-->
+				<!-- Bilder werden hier dynamisch hinzugefügt -->
+			</div>
         </div>
     </div>
 </form>
@@ -174,8 +191,8 @@
         }
 
         // Fortschrittsanzeige einblenden
-        const progressBar = document.querySelector('.progress');
-        progressBar.style.display = 'block';
+        const progressContainer = document.getElementById('progressContainer');
+        progressContainer.style.display = 'block';
         const progressBarInner = document.getElementById('progressBar');
         progressBarInner.style.width = '0%';
         progressBarInner.setAttribute('aria-valuenow', 0);
@@ -188,12 +205,15 @@
 
         const formData = new FormData(form);
 
-        // HF LoRA-Einstellung hinzufügen
-        if (document.getElementById('hf_lora_toggle').checked) {
-            formData.append('hf_lora', 'Scalino84/my-flux-face');
-        } else {
-            formData.delete('hf_lora');
-        }
+		// HF LoRA-Einstellung hinzufügen
+		const hfLoraInput = document.getElementById('hf_lora_toggle');
+		const hfLoraValue = hfLoraInput.value.trim();
+		
+		if (hfLoraValue) {
+			formData.append('hf_lora', hfLoraValue);
+		} else {
+			formData.delete('hf_lora');
+		}
 
         // Formulardaten in ein Objekt umwandeln
         const formObject = Object.fromEntries(formData.entries());
@@ -236,18 +256,25 @@
                     outputDiv.appendChild(document.createElement('br'));
                 });
                 // Fortschrittsanzeige ausblenden
-                progressBar.style.display = 'none';
+                progressContainer.style.display = 'none';
                 progressMessage.style.display = 'none';
             }
         };
-
         socket.onerror = function (event) {
             console.error('WebSocket error:', event);
+            // Fortschrittsanzeige ausblenden im Fehlerfall
+            progressContainer.style.display = 'none';
+            progressMessage.style.display = 'none';
         };
 
         socket.onclose = function (event) {
             console.log('WebSocket connection closed:', event);
         };
+        // Alle Buttons auf der Seite deaktivieren
+        const buttons = document.querySelectorAll('button');
+        buttons.forEach(button => {
+            button.disabled = true;
+        });
     }
 
     // Funktion zur Optimierung des Prompts
@@ -311,11 +338,11 @@
         });
 
         // Add HF LoRA toggle value to each prompt
-        if (document.getElementById('hf_lora_toggle').checked) {
-            prompts.forEach(prompt => prompt.hf_lora = 'Scalino84/my-flux-face');
-        } else {
-            prompts.forEach(prompt => delete prompt.hf_lora);
-        }
+		if (hf_lora_toggle.checked) {
+			formData.append('hf_lora', 'Scalino84/my-flux-face');
+		} else {
+			formData.delete('hf_lora');
+		}
 
         // WebSocket-Verbindung öffnen
         const socket = new WebSocket('ws://localhost:8000/ws');
