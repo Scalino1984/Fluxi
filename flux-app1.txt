@@ -1,0 +1,2748 @@
+Meine Fastapi-app:
+'''
+====================
+Dateipfad: /mnt/d/wsl/apps/testen/flux-app1/mainfile
+Dateiname: main.py
+Änderungsdatum: 2025-01-01 04:15:50
+====================
+
+#!/bin/env python3.11
+import os
+import sqlite3
+import replicate
+import argparse
+import requests
+from datetime import datetime
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request, Form, Query,Response
+from fastapi.templating import Jinja2Templates
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
+from typing import Optional, List
+import uvicorn
+from asyncio import gather, Semaphore, create_task
+from mistralai import Mistral
+from dotenv import load_dotenv
+from contextlib import contextmanager
+from io import BytesIO
+import zipfile
+
+import sys
+print(f"Arguments: {sys.argv}")
+
+
+load_dotenv()
+
+HEADER = "\033[38;2;255;255;153m"
+TITLE = "\033[38;2;255;255;153m"
+MENU = "\033[38;2;255;165;0m"
+SUCCESS = "\033[38;2;153;255;153m"
+ERROR = "\033[38;2;255;69;0m"
+MAIN = "\033[38;2;204;204;255m"
+SPEAKER1 = "\033[38;2;173;216;230m"
+SPEAKER2 = "\033[38;2;255;179;102m"
+RESET = "\033[0m"
+
+#os.system("clear")
+
+#print(f"{HEADER}--------------------\nMY FLUX CREATOR v1.0\n--------------------{RESET}\n")
+
+DOWNLOAD_DIR = "/mnt/d/ai/dialog/2/flux-pics"
+DATABASE_PATH = "flux_logs_neu.db"
+TIMEOUT_DURATION = 900  # Timeout-Dauer in Sekunden
+
+IMAGE_STORAGE_PATH = DOWNLOAD_DIR  # Pfad auf flux-pics setzen
+app = FastAPI()
+
+app.mount("/static", StaticFiles(directory="static"), name="static")
+app.mount("/flux-pics", StaticFiles(directory=DOWNLOAD_DIR), name="flux-pics")
+templates = Jinja2Templates(directory="templates")
+
+@contextmanager
+def get_db_connection(db_path=DATABASE_PATH):
+    conn = sqlite3.connect(db_path)
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+def initialize_database(db_path=DATABASE_PATH):
+    with get_db_connection(db_path) as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS generation_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT,
+                prompt TEXT,
+                optimized_prompt TEXT,
+                hf_lora TEXT,
+                lora_scale REAL,
+                aspect_ratio TEXT,
+                guidance_scale REAL,
+                output_quality INTEGER,
+                prompt_strength REAL,
+                num_inference_steps INTEGER,
+                output_file TEXT,
+                album_id INTEGER,
+                category_id INTEGER
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS albums (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS categories (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS pictures (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT,
+                file_path TEXT,
+                file_name TEXT,
+                album_id INTEGER,
+                FOREIGN KEY (album_id) REFERENCES albums(id)
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS picture_categories (
+                picture_id INTEGER,
+                category_id INTEGER,
+                FOREIGN KEY (picture_id) REFERENCES pictures(id),
+                FOREIGN KEY (category_id) REFERENCES categories(id),
+                PRIMARY KEY (picture_id, category_id)
+            )
+        """)
+        conn.commit()
+
+def log_generation(args, optimized_prompt, image_file):
+    file_path, file_name = os.path.split(image_file)
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO generation_logs (
+                    timestamp, prompt, optimized_prompt, hf_lora, lora_scale, aspect_ratio, guidance_scale,
+                    output_quality, prompt_strength, num_inference_steps, output_file, album_id, category_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                args.prompt,
+                optimized_prompt,
+                args.hf_lora,
+                args.lora_scale,
+                args.aspect_ratio,
+                args.guidance_scale,
+                args.output_quality,
+                args.prompt_strength,
+                args.num_inference_steps,
+                image_file,
+                args.album_id,
+                args.category_id
+            ))
+            picture_id = cursor.lastrowid
+            cursor.execute("""
+                INSERT INTO pictures (
+                    timestamp, file_path, file_name, album_id
+                ) VALUES (?, ?, ?, ?)
+            """, (
+                datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                file_path,
+                file_name,
+                args.album_id
+            ))
+            picture_id = cursor.lastrowid
+
+            # Insert multiple categories
+            for category_id in args.category_ids:
+                cursor.execute("""
+                    INSERT INTO picture_categories (picture_id, category_id)
+                    VALUES (?, ?)
+                """, (picture_id, category_id))
+
+            conn.commit()
+    except sqlite3.Error as e:
+        print(f"Error logging generation: {e}")
+
+@app.on_event("startup")
+def startup_event():
+    initialize_database()
+
+@app.get("/")
+def read_root(request: Request):
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, name FROM albums")
+        albums = cursor.fetchall()
+        cursor.execute("SELECT id, name FROM categories")
+        categories = cursor.fetchall()
+    return templates.TemplateResponse("index.html", {"request": request, "albums": albums, "categories": categories})
+
+@app.get("/archive")
+def read_archive(
+    request: Request,
+    album: Optional[str] = Query(None),
+    category: Optional[List[str]] = Query(None),
+    search: Optional[str] = None,
+    items_per_page: int = Query(30),
+    page: int = Query(1)
+):
+    album_id = int(album) if album and album.isdigit() else None
+    category_ids = [int(cat) for cat in category] if category else []
+    offset = (page - 1) * items_per_page
+
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        query = """
+            SELECT gl.timestamp, gl.prompt, gl.optimized_prompt, gl.output_file, a.name as album, c.name as category
+            FROM generation_logs gl
+            LEFT JOIN albums a ON gl.album_id = a.id
+            LEFT JOIN categories c ON gl.category_id = c.id
+            WHERE 1=1
+        """
+        params = []
+
+        if album_id is not None:
+            query += " AND gl.album_id = ?"
+            params.append(album_id)
+
+        if category_ids:
+            query += " AND gl.category_id IN ({})".format(','.join('?' for _ in category_ids))
+            params.extend(category_ids)
+
+        if search:
+            query += " AND (gl.prompt LIKE ? OR gl.optimized_prompt LIKE ?)"
+            params.append(f'%{search}%')
+            params.append(f'%{search}%')
+
+        query += " ORDER BY gl.timestamp DESC LIMIT ? OFFSET ?"
+        params.extend([items_per_page, offset])
+        cursor.execute(query, params)
+        logs = cursor.fetchall()
+
+        logs = [{
+            "timestamp": log[0],
+            "prompt": log[1],
+            "optimized_prompt": log[2],
+            "output_file": log[3],
+            "album": log[4],
+            "category": log[5]
+        } for log in logs]
+
+        cursor.execute("SELECT id, name FROM albums")
+        albums = cursor.fetchall()
+
+        cursor.execute("SELECT id, name FROM categories")
+        categories = cursor.fetchall()
+
+    return templates.TemplateResponse("archive.html", {
+        "request": request,
+        "logs": logs,
+        "albums": albums,
+        "categories": categories,
+        "selected_album": album,
+        "selected_categories": category_ids,
+        "search_query": search,
+        "items_per_page": items_per_page,
+        "page": page
+    })
+
+
+@app.get("/backend")
+def read_backend(request: Request):
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, name FROM albums")
+        albums = cursor.fetchall()
+        cursor.execute("SELECT id, name FROM categories")
+        categories = cursor.fetchall()
+    return templates.TemplateResponse("backend.html", {"request": request, "albums": albums, "categories": categories})
+
+@app.post("/create_album")
+def create_album(name: str = Form(...)):
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("INSERT INTO albums (name) VALUES (?)", (name,))
+            conn.commit()
+        return {"message": "Album erstellt"}
+    except sqlite3.Error as e:
+        raise HTTPException(status_code=500, detail=f"Error creating album: {e}")
+
+@app.post("/create_category")
+def create_category(name: str = Form(...)):
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("INSERT INTO categories (name) VALUES (?)", (name,))
+            conn.commit()
+        return {"message": "Kategorie erstellt"}
+    except sqlite3.Error as e:
+        raise HTTPException(status_code=500, detail=f"Error creating category: {e}")
+
+@app.post("/flux-pics")
+async def download_images(request: Request):
+    try:
+        body = await request.json()
+        print(f"Received request body: {body}")  # Debug log
+        
+        image_files = body.get("selectedImages", [])
+        if not image_files:
+            raise HTTPException(status_code=400, detail="Keine Bilder ausgewählt.")
+            
+        print(f"Processing image files: {image_files}")  # Debug log
+
+        # Überprüfe ob Download-Verzeichnis existiert
+        if not os.path.exists(IMAGE_STORAGE_PATH):
+            print(f"Storage path not found: {IMAGE_STORAGE_PATH}")  # Debug log
+            raise HTTPException(status_code=500, detail="Storage path not found")
+
+        zip_buffer = BytesIO()
+        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+            for image_file in image_files:
+                image_path = os.path.join(IMAGE_STORAGE_PATH, image_file)
+                print(f"Processing file: {image_path}")  # Debug log
+                
+                if os.path.exists(image_path):
+                    zip_file.write(image_path, arcname=image_file)
+                else:
+                    print(f"File not found: {image_path}")  # Debug log
+                    raise HTTPException(status_code=404, detail=f"Bild {image_file} nicht gefunden.")
+
+        zip_buffer.seek(0)
+        
+        # Korrekter Response mit Buffer
+        return Response(
+            content=zip_buffer.getvalue(),
+            media_type="application/zip",
+            headers={
+                "Content-Disposition": f"attachment; filename=images.zip"
+            }
+        )
+        
+    except Exception as e:
+        print(f"Error in download_images: {str(e)}")  # Debug log
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/flux-pics/single")
+async def download_single_image(request: Request):
+    try:
+        data = await request.json()
+        filename = data.get("filename")
+        print(f"Requested file download: {filename}")  # Debug log
+        
+        if not filename:
+            print("No filename provided")  # Debug log
+            raise HTTPException(status_code=400, detail="Kein Dateiname angegeben")
+            
+        file_path = os.path.join(IMAGE_STORAGE_PATH, filename)
+        print(f"Full file path: {file_path}")  # Debug log
+        
+        if not os.path.exists(file_path):
+            print(f"File not found: {file_path}")  # Debug log
+            raise HTTPException(status_code=404, detail=f"Datei {filename} nicht gefunden")
+
+        # Determine MIME type
+        file_extension = filename.lower().split('.')[-1]
+        mime_types = {
+            'png': 'image/png',
+            'jpg': 'image/jpeg',
+            'jpeg': 'image/jpeg',
+            'gif': 'image/gif',
+            'webp': 'image/webp'
+        }
+        media_type = mime_types.get(file_extension, 'application/octet-stream')
+        print(f"Serving file with media type: {media_type}")  # Debug log
+            
+        return FileResponse(
+            path=file_path,
+            filename=filename,
+            media_type=media_type,
+            headers={
+                "Content-Disposition": f"attachment; filename={filename}"
+            }
+        )
+    except Exception as e:
+        print(f"Error in download_single_image: {str(e)}")  # Debug log
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    await websocket.accept()
+    try:
+        data = await websocket.receive_json()
+        prompts = data.get("prompts", [data])
+
+        for prompt_data in prompts:
+            prompt_data['lora_scale'] = float(prompt_data['lora_scale'])
+            prompt_data['guidance_scale'] = float(prompt_data['guidance_scale'])
+            prompt_data['prompt_strength'] = float(prompt_data['prompt_strength'])
+            prompt_data['num_inference_steps'] = int(prompt_data['num_inference_steps'])
+            prompt_data['num_outputs'] = int(prompt_data['num_outputs'])
+            prompt_data['output_quality'] = int(prompt_data['output_quality'])
+
+            # Handle new album and category creation
+            album_name = prompt_data.get('album_id')
+            category_names = prompt_data.get('category_ids', [])
+
+            if album_name and not album_name.isdigit():
+                with get_db_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("INSERT INTO albums (name) VALUES (?)", (album_name,))
+                    conn.commit()
+                    prompt_data['album_id'] = cursor.lastrowid
+            else:
+                prompt_data['album_id'] = int(album_name) if album_name else None
+
+            category_ids = []
+            for category_name in category_names:
+                if not category_name.isdigit():
+                    with get_db_connection() as conn:
+                        cursor = conn.cursor()
+                        cursor.execute("INSERT INTO categories (name) VALUES (?)", (category_name,))
+                        conn.commit()
+                        category_ids.append(cursor.lastrowid)
+                else:
+                    category_ids.append(int(category_name) if category_name else None)
+            prompt_data['category_ids'] = category_ids
+
+            args = argparse.Namespace(**prompt_data)
+
+            # await websocket.send_json({"message": "Optimiere Prompt..."})
+            optimized_prompt = optimize_prompt(args.prompt) if getattr(args, 'agent', False) else args.prompt
+            await websocket.send_json({"optimized_prompt": optimized_prompt})
+
+            if prompt_data.get("optimize_only"):
+                continue
+
+            await generate_and_download_image(websocket, args, optimized_prompt)
+    except WebSocketDisconnect:
+        print("Client disconnected")
+    except Exception as e:
+        await websocket.send_json({"message": str(e)})
+        raise e
+    finally:
+        await websocket.close()
+
+async def fetch_image(item, index, args, filenames, semaphore, websocket, timestamp):
+    async with semaphore:
+        try:
+            response = requests.get(item, timeout=TIMEOUT_DURATION)
+            if response.status_code == 200:
+                filename = f"{DOWNLOAD_DIR}/image_{timestamp}_{index}.{args.output_format}"
+                with open(filename, "wb") as file:
+                    file.write(response.content)
+                filenames.append(f"/flux-pics/image_{timestamp}_{index}.{args.output_format}")
+                progress = int((index + 1) / args.num_outputs * 100)
+                await websocket.send_json({"progress": progress})
+            else:
+                await websocket.send_json({"message": f"Fehler beim Herunterladen des Bildes {index + 1}: {response.status_code}"})
+        except requests.exceptions.Timeout:
+            await websocket.send_json({"message": f"Timeout beim Herunterladen des Bildes {index + 1}"})
+
+async def generate_and_download_image(websocket: WebSocket, args, optimized_prompt):
+    try:
+        input_data = {
+            "prompt": optimized_prompt,
+            "hf_lora": getattr(args, 'hf_lora', None),  # Use getattr to safely access hf_lora
+            "lora_scale": args.lora_scale,
+            "num_outputs": args.num_outputs,
+            "aspect_ratio": args.aspect_ratio,
+            "output_format": args.output_format,
+            "guidance_scale": args.guidance_scale,
+            "output_quality": args.output_quality,
+            "prompt_strength": args.prompt_strength,
+            "num_inference_steps": args.num_inference_steps,
+            "disable_safety_checker": False
+        }
+
+        #await websocket.send_json({"message": "Generiere Bilder..."})
+        
+        # Debug: Log the start of the replication process
+        print(f"Starting replication process for {args.num_outputs} outputs with timeout {TIMEOUT_DURATION}")
+
+        output = replicate.run(
+            "lucataco/flux-dev-lora:091495765fa5ef2725a175a57b276ec30dc9d39c22d30410f2ede68a3eab66b3",
+            input=input_data,
+            timeout=TIMEOUT_DURATION
+        )
+        
+        if not os.path.exists(DOWNLOAD_DIR):
+            os.makedirs(DOWNLOAD_DIR)
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filenames = []
+        semaphore = Semaphore(3)  # Limit concurrent downloads
+
+        tasks = [create_task(fetch_image(item, index, args, filenames, semaphore, websocket, timestamp)) for index, item in enumerate(output)]
+        await gather(*tasks)
+
+        for file in filenames:
+            log_generation(args, optimized_prompt, file)
+        
+        await websocket.send_json({"message": "Bilder erfolgreich generiert", "generated_files": filenames})
+    except requests.exceptions.Timeout:
+        await websocket.send_json({"message": "Fehler bei der Bildgenerierung: Timeout überschritten"})
+    except Exception as e:
+        await websocket.send_json({"message": f"Fehler bei der Bildgenerierung: {str(e)}"})
+        raise Exception(f"Fehler bei der Bildgenerierung: {str(e)}")
+
+def optimize_prompt(prompt):
+    api_key = os.environ.get("MISTRAL_API_KEY")
+    agent_id = os.environ.get("MISTRAL_FLUX_AGENT")
+
+    if not api_key or not agent_id:
+        raise ValueError("MISTRAL_API_KEY oder MISTRAL_FLUX_AGENT nicht gesetzt")
+
+    client = Mistral(api_key=api_key)
+    chat_response = client.agents.complete(
+        agent_id=agent_id,
+        messages=[{"role": "user", "content": f"Optimiere folgenden Prompt für Flux Lora: {prompt}"}]
+    )
+    
+    return chat_response.choices[0].message.content
+
+if __name__ == "__main__":
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description="Beschreibung")
+    parser.add_argument('--hf_lora', default=None, help='HF LoRA Model')
+    args = parser.parse_args()
+
+    # Pass arguments to the FastAPI application
+    app.state.args = args
+
+    # Run the Uvicorn server
+#    uvicorn.run(app, host="0.0.0.0", port=8000, timeout_keep_alive=900)
+
+    # Run server
+    uvicorn.run(
+        "main:app",
+        host="0.0.0.0",
+        port=8000,
+        reload=True,
+        log_level="debug"
+    )
+
+====================
+Dateipfad: /mnt/d/wsl/apps/testen/flux-app1/mainfile/static
+Dateiname: script.js
+Änderungsdatum: 2025-01-01 08:52:31
+====================
+
+// 1. Logger-Klasse
+class Logger {
+    static isDebugMode = false;
+
+    static debug(message, data = null) {
+        if (this.isDebugMode) {
+            console.log(`[Debug] ${message}`, data || '');
+        }
+    }
+
+    static error(message, error = null) {
+        console.error(`[Error] ${message}`, error || '');
+    }
+
+    static initializeDebugMode() {
+        try {
+            const urlParams = new URLSearchParams(window.location.search);
+            this.isDebugMode = urlParams.has('debug');
+        } catch (error) {
+            console.error('Fehler beim Initialisieren des Debug-Modus:', error);
+            this.isDebugMode = false;
+        }
+    }
+}
+
+// 2. Utils
+const utils = {
+    showLoading() {
+        if (document.body) {
+            document.body.classList.add('loading');
+            Logger.debug('Loading-Status aktiviert');
+        } else {
+            Logger.error('document.body nicht verfügbar');
+        }
+    },
+
+    hideLoading() {
+        if (document.body) {
+            document.body.classList.remove('loading');
+            Logger.debug('Loading-Status deaktiviert');
+        } else {
+            Logger.error('document.body nicht verfügbar');
+        }
+    },
+
+    safeGetElement(id) {
+        const element = document.getElementById(id);
+        if (!element) {
+            Logger.error(`Element mit ID '${id}' nicht gefunden`);
+            return null;
+        }
+        return element;
+    },
+
+    async withLoading(asyncFn) {
+        try {
+            this.showLoading();
+            await asyncFn();
+        } finally {
+            this.hideLoading();
+        }
+    }
+};
+
+// In der ImageModal-Klasse:
+class ImageModal {
+    constructor() {
+        this.modal = null;
+        this.modalImg = null;
+        this.initialize();
+    }
+
+    initialize() {
+        if (typeof bootstrap === 'undefined') {
+            Logger.error('Bootstrap ist nicht verfügbar');
+            return;
+        }
+
+        const modalElement = utils.safeGetElement('imageModal');
+        if (!modalElement) return;
+
+        this.modal = new bootstrap.Modal(modalElement);
+        this.modalImg = utils.safeGetElement('modalImage');
+        
+        // Event-Listener für Modal-Schließen
+        modalElement.addEventListener('hidden.bs.modal', () => {
+            this.cleanupModal();
+        });
+
+        // Klick-Handler für Modal-Container
+        const imageContainer = document.querySelector('.image-container');
+        if (imageContainer && this.modalImg) {
+            imageContainer.addEventListener('click', (e) => {
+                if (e.target === this.modalImg) {
+                    this.hide();
+                }
+            });
+        }
+
+        // Download-Button Handler
+        const downloadBtn = utils.safeGetElement('modalDownloadBtn');
+        if (downloadBtn) {
+            downloadBtn.addEventListener('click', async () => {
+                const filename = this.modalImg?.dataset?.filename;
+                if (filename) {
+                    await this.downloadImage(filename);
+                } else {
+                    Logger.error('Kein Dateiname für Download verfügbar');
+                }
+            });
+        }
+    }
+
+	// In der ImageModal Klasse
+	async downloadImage(filename) {
+		await utils.withLoading(async () => {
+			try {
+				const response = await fetch('/flux-pics/single', {
+					method: 'POST',  // Hier müssen wir die richtige Methode verwenden
+					headers: { 
+						'Content-Type': 'application/json',
+						// Eventuell benötigte zusätzliche Header
+						'Accept': 'application/octet-stream'
+					},
+					body: JSON.stringify({ filename })
+				});
+	
+				if (!response.ok) {
+					// Wenn der Download trotzdem funktioniert hat, unterdrücken wir die Fehlermeldung
+					if (response.status === 405 && response.headers.get('content-disposition')) {
+						Logger.debug('Download erfolgreich trotz 405 Status');
+					} else {
+						throw new Error(`HTTP error! status: ${response.status}`);
+					}
+				}
+	
+				const blob = await response.blob();
+				const url = window.URL.createObjectURL(blob);
+				const a = document.createElement('a');
+				a.style.display = 'none';
+				a.href = url;
+				a.download = filename;
+				document.body.appendChild(a);
+				a.click();
+				window.URL.revokeObjectURL(url);
+				document.body.removeChild(a);
+			} catch (error) {
+				// Nur einen Fehler anzeigen, wenn der Download wirklich fehlgeschlagen ist
+				if (!document.querySelector(`[download="${filename}"]`)) {
+					Logger.error('Download-Fehler:', error);
+					alert('Ein Fehler ist beim Download aufgetreten: ' + error.message);
+				}
+			}
+		});
+	}
+
+    open(img) {
+        if (!this.modal || !this.modalImg) {
+            Logger.error('Modal nicht korrekt initialisiert');
+            return;
+        }
+
+        Logger.debug('Öffne Bild-Modal', img);
+        
+        this.modalImg.src = img.src;
+        this.modalImg.dataset.filename = img.dataset.filename;
+
+        const metadataFields = ['format', 'timestamp', 'album', 'category', 'prompt', 'optimized_prompt'];
+        metadataFields.forEach(field => {
+            const element = utils.safeGetElement(`modal${field.charAt(0).toUpperCase() + field.slice(1)}`);
+            if (element) {
+                element.textContent = img.dataset[field] || 'Nicht verfügbar';
+            }
+        });
+
+        this.modal.show();
+    }
+
+    hide() {
+        this.modal?.hide();
+    }
+
+    cleanupModal() {
+        document.body.classList.remove('modal-open');
+        const backdrop = document.querySelector('.modal-backdrop');
+        if (backdrop) {
+            backdrop.remove();
+        }
+        document.body.style.overflow = '';
+        document.body.style.paddingRight = '';
+    }
+}
+
+class GalleryManager {
+    constructor() {
+        this.selectedImages = new Set();
+        this.imageModal = new ImageModal();
+        this.initialize();
+    }
+
+    initialize() {
+        this.initializeSelectionHandling();
+        this.initializeGalleryViews();
+        this.initializeDownloadHandling();
+    }
+
+    initializeSelectionHandling() {
+        // "Alle auswählen" Funktionalität
+        const selectAllCheckbox = utils.safeGetElement('selectAll');
+        if (selectAllCheckbox) {
+            selectAllCheckbox.addEventListener('change', () => {
+                const itemCheckboxes = document.querySelectorAll('.select-item');
+                itemCheckboxes.forEach(checkbox => {
+                    checkbox.checked = selectAllCheckbox.checked;
+                    this.updateSelectedImages(checkbox);
+                });
+            });
+        }
+
+        // Einzelne Bildauswahl
+        document.querySelectorAll('.select-item').forEach(checkbox => {
+            checkbox.addEventListener('change', () => this.updateSelectedImages(checkbox));
+        });
+    }
+
+    updateSelectedImages(checkbox) {
+        const card = checkbox.closest('.card');
+        if (!card) return;
+
+        const img = card.querySelector('img');
+        if (!img || !img.dataset.filename) {
+            Logger.error('Ungültiges Bild-Element in der Karte');
+            return;
+        }
+
+        if (checkbox.checked) {
+            this.selectedImages.add(img.dataset.filename);
+        } else {
+            this.selectedImages.delete(img.dataset.filename);
+        }
+
+        Logger.debug(`Ausgewählte Bilder aktualisiert: ${this.selectedImages.size} Bilder`);
+    }
+
+    getSelectedImages() {
+        return Array.from(this.selectedImages);
+    }
+
+    initializeGalleryViews() {
+        // Thumbnail-Galerie
+        const thumbGalleryBtn = utils.safeGetElement('thumbgalleryBtn');
+        if (thumbGalleryBtn) {
+            thumbGalleryBtn.addEventListener('click', () => this.openThumbnailGallery());
+        }
+
+        // Grid Layout
+        const gridLayout = utils.safeGetElement('gridLayout');
+        if (gridLayout) {
+            gridLayout.addEventListener('change', () => this.updateGridLayout(gridLayout.value));
+        }
+
+        // Bild-Thumbnails
+        document.querySelectorAll('.image-thumbnail').forEach(img => {
+            img.addEventListener('click', () => this.imageModal.open(img));
+        });
+    }
+
+    async openThumbnailGallery() {
+        const selectedImages = this.getSelectedImages();
+        if (selectedImages.length === 0) {
+            alert('Keine Bilder ausgewählt.');
+            return;
+        }
+
+        const galleryModal = new bootstrap.Modal(utils.safeGetElement('thumbGalleryModal'));
+        const container = utils.safeGetElement('thumbGalleryContainer');
+        if (!container) return;
+
+        container.innerHTML = '';
+
+        selectedImages.forEach(filename => {
+            const thumbContainer = this.createThumbnailElement(filename);
+            if (thumbContainer) {
+                container.appendChild(thumbContainer);
+            }
+        });
+
+        galleryModal.show();
+    }
+
+    createThumbnailElement(filename) {
+        const container = document.createElement('div');
+        container.className = 'thumb-container m-2';
+
+        const img = document.createElement('img');
+        img.src = `/flux-pics/${filename}`;
+        img.className = 'img-thumbnail thumbnail-img';
+        img.dataset.filename = filename;
+        img.style.maxWidth = '150px';
+        img.style.cursor = 'pointer';
+
+        const downloadBtn = document.createElement('button');
+        downloadBtn.className = 'btn btn-sm btn-primary download-thumb';
+        downloadBtn.innerHTML = '<i class="fas fa-download"></i>';
+
+        // Event-Listener
+        img.addEventListener('click', () => this.imageModal.open(img));
+        downloadBtn.addEventListener('click', async () => {
+            await this.imageModal.downloadImage(filename);
+        });
+
+        container.appendChild(img);
+        container.appendChild(downloadBtn);
+
+        return container;
+    }
+
+    updateGridLayout(columns) {
+        const imageGrid = utils.safeGetElement('imageGrid');
+        if (imageGrid) {
+            const validColumns = Math.max(1, Math.min(6, parseInt(columns) || 3));
+            imageGrid.className = `row row-cols-1 row-cols-md-${validColumns}`;
+            Logger.debug(`Grid-Layout aktualisiert: ${validColumns} Spalten`);
+        }
+    }
+
+    initializeDownloadHandling() {
+        const downloadBtn = utils.safeGetElement('downloadSelected');
+        if (downloadBtn) {
+            downloadBtn.addEventListener('click', () => this.handleBulkDownload());
+        }
+    }
+
+    async handleBulkDownload() {
+        const selectedImages = this.getSelectedImages();
+        if (selectedImages.length === 0) {
+            alert('Keine Bilder ausgewählt.');
+            return;
+        }
+
+        const useZip = selectedImages.length > 1 && 
+            confirm('Möchten Sie die Bilder als ZIP-Datei herunterladen?\nKlicken Sie "OK" für ZIP oder "Abbrechen" für Einzeldownloads.');
+
+        await utils.withLoading(async () => {
+            try {
+                if (useZip) {
+                    await this.downloadAsZip(selectedImages);
+                } else {
+                    await this.downloadIndividually(selectedImages);
+                }
+                alert('Download erfolgreich abgeschlossen.');
+            } catch (error) {
+                Logger.error('Bulk-Download Fehler:', error);
+                alert('Ein Fehler ist aufgetreten: ' + error.message);
+            }
+        });
+    }
+
+    async downloadAsZip(files) {
+        const response = await fetch('/flux-pics', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ selectedImages: files })
+        });
+
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.style.display = 'none';
+        a.href = url;
+        a.download = 'images.zip';
+        document.body.appendChild(a);
+        a.click();
+        window.URL.revokeObjectURL(url);
+        document.body.removeChild(a);
+    }
+
+    async downloadIndividually(files) {
+        for (const filename of files) {
+            await this.imageModal.downloadImage(filename);
+            // Kleine Pause zwischen Downloads
+            await new Promise(resolve => setTimeout(resolve, 500));
+        }
+    }
+}
+// Slideshow-Verwaltung
+// In der SlideshowManager-Klasse:
+class SlideshowManager {
+    constructor(gallery) {
+        if (!gallery) {
+            Logger.error('GalleryManager ist erforderlich');
+            throw new Error('GalleryManager ist erforderlich');
+        }
+        this.gallery = gallery;
+        this.slideInterval = 3000;
+        this.currentSlideIndex = 0;
+        this.slideshowInterval = null;
+        this.carousel = null;
+        this.slideshowModal = null;
+        
+        // Initialisierung direkt im Konstruktor
+        const slideshowBtn = utils.safeGetElement('slideshowBtn');
+        if (slideshowBtn) {
+            slideshowBtn.addEventListener('click', () => this.openSlideshow());
+        }
+    }
+
+    async openSlideshow() {
+        const selectedImages = this.gallery.getSelectedImages();
+        if (selectedImages.length === 0) {
+            alert('Keine Bilder ausgewählt.');
+            return;
+        }
+
+        const modalElement = utils.safeGetElement('slideshowModal');
+        if (!modalElement) return;
+
+        this.slideshowModal = new bootstrap.Modal(modalElement);
+        const container = utils.safeGetElement('slideshowContainer');
+        if (!container) return;
+
+        container.innerHTML = '';
+        this.createSlides(container, selectedImages);
+
+        const carouselElement = utils.safeGetElement('carouselExampleControls');
+        if (carouselElement) {
+            this.carousel = new bootstrap.Carousel(carouselElement, {
+                interval: false
+            });
+        }
+
+        // Event-Listener für Modal-Schließen
+        modalElement.addEventListener('hidden.bs.modal', () => {
+            this.cleanupSlideshow();
+        });
+
+        this.setupSlideshowControls();
+        this.slideshowModal.show();
+    }
+
+    createSlides(container, images) {
+        images.forEach((filename, index) => {
+            const div = document.createElement('div');
+            div.classList.add('carousel-item');
+            if (index === 0) div.classList.add('active');
+
+            const img = document.createElement('img');
+            img.src = `/flux-pics/${filename}`;
+            img.classList.add('d-block', 'w-100');
+            img.dataset.filename = filename;
+
+            div.appendChild(img);
+            container.appendChild(div);
+        });
+    }
+
+    setupSlideshowControls() {
+        const playBtn = utils.safeGetElement('playSlideshow');
+        const pauseBtn = utils.safeGetElement('pauseSlideshow');
+
+        if (playBtn && pauseBtn) {
+            playBtn.addEventListener('click', () => this.startSlideshow());
+            pauseBtn.addEventListener('click', () => this.pauseSlideshow());
+        }
+
+        const fullscreenBtn = utils.safeGetElement('fullscreenBtn');
+        if (fullscreenBtn) {
+            fullscreenBtn.addEventListener('click', () => this.toggleFullscreen());
+        }
+
+        const downloadBtn = utils.safeGetElement('downloadCurrentSlide');
+        if (downloadBtn) {
+            downloadBtn.addEventListener('click', () => this.downloadCurrentSlide());
+        }
+    }
+
+    startSlideshow() {
+        if (!this.carousel) return;
+
+        this.slideshowInterval = setInterval(() => {
+            this.carousel.next();
+        }, this.slideInterval);
+
+        const playBtn = utils.safeGetElement('playSlideshow');
+        const pauseBtn = utils.safeGetElement('pauseSlideshow');
+        if (playBtn && pauseBtn) {
+            playBtn.style.display = 'none';
+            pauseBtn.style.display = 'block';
+        }
+    }
+
+    pauseSlideshow() {
+        if (this.slideshowInterval) {
+            clearInterval(this.slideshowInterval);
+            this.slideshowInterval = null;
+        }
+
+        const playBtn = utils.safeGetElement('playSlideshow');
+        const pauseBtn = utils.safeGetElement('pauseSlideshow');
+        if (playBtn && pauseBtn) {
+            pauseBtn.style.display = 'none';
+            playBtn.style.display = 'block';
+        }
+    }
+
+    async toggleFullscreen() {
+        const modalElement = utils.safeGetElement('slideshowModal');
+        if (!modalElement) return;
+
+        try {
+            if (!document.fullscreenElement) {
+                if (modalElement.requestFullscreen) {
+                    await modalElement.requestFullscreen();
+                } else if (modalElement.webkitRequestFullscreen) {
+                    await modalElement.webkitRequestFullscreen();
+                } else if (modalElement.msRequestFullscreen) {
+                    await modalElement.msRequestFullscreen();
+                }
+            } else {
+                if (document.exitFullscreen) {
+                    await document.exitFullscreen();
+                }
+            }
+        } catch (error) {
+            Logger.error('Vollbild-Fehler:', error);
+        }
+    }
+
+    async downloadCurrentSlide() {
+        const activeSlide = document.querySelector('.carousel-item.active img');
+        if (activeSlide?.dataset?.filename) {
+            await this.gallery.imageModal.downloadImage(activeSlide.dataset.filename);
+        } else {
+            Logger.error('Kein aktives Bild gefunden');
+        }
+    }
+
+    cleanupSlideshow() {
+        this.pauseSlideshow();
+        
+        document.body.classList.remove('modal-open');
+        const backdrop = document.querySelector('.modal-backdrop');
+        if (backdrop) {
+            backdrop.remove();
+        }
+        
+        document.body.style.overflow = '';
+        document.body.style.paddingRight = '';
+        
+        if (document.fullscreenElement) {
+            document.exitFullscreen().catch(err => {
+                Logger.error('Fehler beim Beenden des Vollbildmodus:', err);
+            });
+        }
+    }
+}
+// 3. AppInitializer-Klasse
+class AppInitializer {
+    constructor() {
+        this.gallery = null;
+        this.slideshow = null;
+    }
+
+    initialize() {
+        try {
+            Logger.initializeDebugMode();
+            
+            document.addEventListener('DOMContentLoaded', () => {
+                try {
+                    this.initializeComponents();
+                    this.setupGlobalEventListeners();
+                    Logger.debug('Anwendung erfolgreich initialisiert');
+                } catch (error) {
+                    Logger.error('Fehler bei der Initialisierung:', error);
+                    alert('Es gab ein Problem beim Laden der Anwendung. Bitte laden Sie die Seite neu.');
+                }
+            });
+        } catch (error) {
+            console.error('Kritischer Fehler bei der Initialisierung:', error);
+        }
+    }
+
+    initializeComponents() {
+        try {
+            this.gallery = new GalleryManager();
+            this.slideshow = new SlideshowManager(this.gallery);
+            Logger.debug('Komponenten initialisiert');
+        } catch (error) {
+            Logger.error('Fehler bei der Komponenten-Initialisierung:', error);
+            throw error;
+        }
+    }
+
+    setupGlobalEventListeners() {
+        try {
+            this.setupScrollToTop();
+            this.setupKeyboardNavigation();
+            Logger.debug('Globale Event-Listener eingerichtet');
+        } catch (error) {
+            Logger.error('Fehler beim Einrichten der Event-Listener:', error);
+            throw error;
+        }
+    }
+
+    setupScrollToTop() {
+        const scrollTopBtn = utils.safeGetElement('scrollTopBtn');
+        if (scrollTopBtn) {
+            window.addEventListener('scroll', () => {
+                scrollTopBtn.style.display = window.scrollY > 300 ? 'block' : 'none';
+            });
+
+            scrollTopBtn.addEventListener('click', () => {
+                window.scrollTo({ 
+                    top: 0, 
+                    behavior: 'smooth' 
+                });
+            });
+        }
+    }
+
+    setupKeyboardNavigation() {
+        document.addEventListener('keydown', (e) => this.handleKeyboardNavigation(e));
+    }
+
+    handleKeyboardNavigation(e) {
+        if (e.key === 'Escape') {
+            this.closeAllModals();
+        }
+    }
+
+    closeAllModals() {
+        try {
+            document.querySelectorAll('.modal.show').forEach(modalElement => {
+                const modal = bootstrap.Modal.getInstance(modalElement);
+                if (modal) {
+                    modal.hide();
+                    this.cleanupModalEffects();
+                }
+            });
+        } catch (error) {
+            Logger.error('Fehler beim Schließen der Modals:', error);
+        }
+    }
+
+    cleanupModalEffects() {
+        document.body.classList.remove('modal-open');
+        document.body.style.overflow = '';
+        document.body.style.paddingRight = '';
+
+        const backdrop = document.querySelector('.modal-backdrop');
+        if (backdrop) {
+            backdrop.remove();
+        }
+
+        if (document.fullscreenElement) {
+            document.exitFullscreen().catch(err => {
+                Logger.error('Fehler beim Beenden des Vollbildmodus:', err);
+            });
+        }
+    }
+
+    checkBootstrapAvailability() {
+        if (typeof bootstrap === 'undefined') {
+            Logger.error('Bootstrap ist nicht verfügbar');
+            return false;
+        }
+        return true;
+    }
+}
+
+// 4. Anwendung starten
+try {
+    const app = new AppInitializer();
+    app.initialize();
+} catch (error) {
+    console.error('Kritischer Fehler beim Erstellen der Anwendung:', error);
+}
+
+====================
+Dateipfad: /mnt/d/wsl/apps/testen/flux-app1/mainfile/static
+Dateiname: style.css
+Änderungsdatum: 2025-01-01 13:12:01
+====================
+
+/* Root Variablen für konsistentes Theming */
+:root {
+    --primary-color: #3b5998;
+    --primary-hover: #4a69ad;
+    --secondary-color: #4c4f6b;
+    --bg-primary: #ffffff;
+    --bg-secondary: #66b3ff;
+    --bg-extra: rgba(0, 123, 255, 0.5);
+    --bg-dark: #1a1a2e;
+    --bg-forms: #cce5ff;
+    --text-color: #333333;
+    --text-light: #666666;
+    --border-color: #dee2e6;
+    --error-color: #dc3545;
+    --success-color: #28a745;
+    --warning-color: #ffc107;
+    --border-radius: 0.5rem;
+    --transition-speed: 0.2s;
+    --shadow-sm: 0 2px 4px rgba(0, 0, 0, 0.05);
+    --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.1);
+    --shadow-lg: 0 10px 15px rgba(0, 0, 0, 0.1);
+}
+
+/* Globale Styles */
+body {
+    color: var(--text-color);
+    background-color: var(--bg-extra);
+    background-image: url('bg-1920x1080.png');
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+    line-height: 1.6;
+    background-attachment: fixed;
+    width: 100%;
+    margin: 0;
+    padding: 0;
+}
+
+/* Hauptcontainer für zentrale Ausrichtung */
+#mainContainer {
+    width: 90%;
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 1rem;
+    background: var(--bg-primary);
+    border-radius: var(--border-radius);
+    box-shadow: var(--shadow-md);
+}
+
+/* Überschriften-Styling */
+h1, h2, h3 {
+    font-weight: bold;
+    color: var(--text-color);
+}
+
+h1 {
+    font-size: clamp(1.5rem, 4vw, 2.5rem);
+    margin-bottom: 2rem;
+}
+
+h2 {
+    font-size: 1.75rem;
+    margin-bottom: 1rem;
+}
+
+h3 {
+    font-size: 1.5rem;
+    margin-bottom: 0.75rem;
+}
+/* Button-Styles */
+.btn {
+    padding: 0.5rem 1rem;
+    min-height: 42px;
+    font-weight: 500;
+    border-radius: var(--border-radius);
+    transition: transform var(--transition-speed),
+                background-color var(--transition-speed),
+                box-shadow var(--transition-speed);
+    display: inline-block;
+    text-align: center;
+    cursor: pointer;
+    width: 100%;
+}
+
+.btn-primary {
+    background-color: var(--primary-color);
+    border: none;
+    color: white;
+    font-weight: bold;
+}
+
+.btn-primary:hover {
+    background-color: var(--primary-hover);
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-sm);
+}
+
+.btn-secondary {
+    background-color: var(--secondary-color);
+    border: none;
+    color: white;
+    font-weight: bold;
+}
+
+.btn-secondary:hover {
+    background-color: var(--primary-hover);
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-sm);
+}
+
+/* Dropdown-Menü */
+.form-select {
+    min-height: 42px;
+    padding: 0.5rem 2rem 0.5rem 0.75rem;
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius);
+    background: var(--bg-forms) 
+                url('data:image/svg+xml;charset=US-ASCII,%3Csvg xmlns%3D%22http://www.w3.org/2000/svg%22 viewBox%3D%220 0 4 5%22%3E%3Cpath fill%3D%22%23333%22 d%3D%22M2 0L0 2h4z%22/%3E%3C/svg%3E') 
+                no-repeat right 0.75rem center;
+    background-size: 0.65rem auto;
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    appearance: none;
+    box-shadow: var(--shadow-sm);
+    color: var(--text-color);
+}
+
+.form-select:focus {
+    outline: none;
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 2px rgba(59, 89, 152, 0.25);
+}
+
+/* Fortschrittsanzeige */
+.progress {
+    height: 1.5rem;
+    background-color: rgba(40, 167, 69, 0.2);
+    border-radius: var(--border-radius);
+    overflow: hidden;
+    margin-bottom: 1rem;
+    box-shadow: var(--shadow-sm);
+}
+
+.progress-bar {
+    background-color: rgba(40, 167, 69, 0.8);
+    height: 100%;
+    transition: width 0.4s ease-in-out;
+    font-weight: bold;
+    text-align: center;
+    color: white;
+}
+/* Grid-Layout für Bilder */
+#imageGrid {
+    display: grid;
+    gap: 20px;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    justify-items: center;
+}
+
+#imageGrid .card {
+    background-color: transparent; /* Entfernt Kartenhintergrund */
+    border: none; /* Entfernt Rahmen */
+    margin: 10px;
+    box-shadow: var(--shadow-sm);
+}
+
+#imageGrid img {
+    height: 200px; /* Einheitliche Höhe */
+    width: auto; /* Proportionale Breite */
+    object-fit: cover;
+    border-radius: var(--border-radius);
+    display: block;
+    margin: 0 auto;
+}
+
+/* Bild-Thumbnails */
+.image-thumbnail {
+    border-radius: var(--border-radius);
+    transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.image-thumbnail:hover {
+    transform: scale(1.05);
+    box-shadow: var(--shadow-md);
+}
+
+/* Modal für vergrößerte Bilder */
+#imageModal .modal-body img {
+    max-width: 100%;
+    max-height: 80vh;
+    object-fit: contain;
+    display: block;
+    margin: 0 auto;
+    border-radius: var(--border-radius);
+    box-shadow: var(--shadow-md);
+}
+
+/* Filter- und Anzeigeoptionen */
+.toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 15px;
+    align-items: center;
+    margin-bottom: 1.5rem;
+}
+
+.toolbar .btn,
+.toolbar .form-select {
+    flex: 1 1 auto;
+    min-width: 120px;
+    max-width: 200px;
+}
+
+/* Fortschrittsnachricht */
+#progressMessage {
+    background-color: rgba(40, 167, 69, 0.1); /* Leicht transparentes Grün */
+    border: 1px solid rgba(40, 167, 69, 0.8); /* Passender Rahmen */
+    color: var(--text-color);
+    padding: 1rem;
+    border-radius: var(--border-radius);
+    font-weight: bold;
+    text-align: center;
+    animation: blink 1.5s infinite;
+    margin-top: 1rem;
+}
+
+/* Blinken-Animation */
+@keyframes blink {
+    0% { opacity: 1; }
+    50% { opacity: 0; }
+    100% { opacity: 1; }
+}
+
+/* Scroll-to-Top-Button */
+#scrollTopBtn {
+    width: 60px;
+    height: 60px;
+    border-radius: 50%;
+    background-color: var(--primary-color);
+    background-image: url('arrow-up.png');
+    background-size: cover;
+    background-position: center;
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    z-index: 1000;
+    box-shadow: var(--shadow-md);
+    cursor: pointer;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+#scrollTopBtn:hover {
+    background-color: var(--primary-hover);
+    transform: scale(1.1);
+}
+
+====================
+Dateipfad: /mnt/d/wsl/apps/testen/flux-app1/mainfile/templates
+Dateiname: archive.html
+Änderungsdatum: 2025-01-01 12:53:07
+====================
+
+{% extends "base.html" %}
+
+{% block title %}Flux Bildarchiv{% endblock %}
+
+{% block content %}
+
+<!-- Suche -->
+<div class="mb-3 search-container">
+    <form id="searchForm" action="/archive" method="get" class="d-flex flex-column">
+        <div class="mb-3 w-100">
+            <label for="search" class="form-label">Suche:</label>
+            <input type="text" class="form-control" id="search" name="search" value="{{ search_query }}">
+        </div>
+        <div class="d-flex flex-wrap mt-3">
+            <button type="submit" class="btn btn-primary flex-fill" style="width: 33.33%;">Suchen</button>
+            <button type="reset" class="btn btn-secondary flex-fill ms-2" style="width: 33.33%;">Zurücksetzen</button>
+        </div>
+    </form>
+</div>
+
+<!-- Filter Accordion -->
+<div class="accordion" id="filterAccordion">
+    <div class="accordion-item">
+        <h2 class="accordion-header" id="headingOne">
+            <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseOne" aria-expanded="false" aria-controls="collapseOne">
+                Filteroptionen
+            </button>
+        </h2>
+        <div id="collapseOne" class="accordion-collapse collapse" aria-labelledby="headingOne" data-bs-parent="#filterAccordion">
+            <div class="accordion-body">
+                <!-- <form id="filterForm" action="/archive" method="get" class="d-flex flex-column flex-md-row flex-wrap"> -->
+					<form id="filterForm" action="/archive" method="get" class="d-flex flex-wrap gap-3 align-items-center">
+                    <div class="mb-3 flex-grow-1 me-md-3">
+                        <label for="album_filter" class="form-label">Album:</label>
+                        <select class="form-control" id="album_filter" name="album">
+                            <option value="">Alle</option>
+                            {% for album in albums %}
+                                <option value="{{ album[0] }}" {% if album[0] == selected_album %}selected{% endif %}>{{ album[1] }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="mb-3 flex-grow-1 me-md-3">
+                        <label for="category_filter" class="form-label">Kategorie:</label>
+                        <select class="form-control" id="category_filter" name="category" multiple>
+                            <option value="">Alle</option>
+                            {% for category in categories %}
+                                <option value="{{ category[0] }}" {% if category[0] in selected_categories %}selected{% endif %}>{{ category[1] }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="mb-3 flex-grow-1">
+                        <label for="items_per_page" class="form-label">Bilder pro Seite:</label>
+                        <select class="form-control" id="items_per_page" name="items_per_page">
+                            <option value="15" {% if items_per_page == 15 %}selected{% endif %}>15</option>
+                            <option value="30" {% if items_per_page == 30 %}selected{% endif %}>30</option>
+                            <option value="50" {% if items_per_page == 50 %}selected{% endif %}>50</option>
+                            <option value="75" {% if items_per_page == 75 %}selected{% endif %}>75</option>
+                            <option value="100" {% if items_per_page == 100 %}selected{% endif %}>100</option>
+                        </select>
+                    </div>
+                    <input type="hidden" name="page" value="{{ page }}" />
+                    <div class="d-flex flex-wrap mt-3">
+                        <button type="submit" class="btn btn-primary flex-fill" style="width: 33.34%;">Filtern</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Archiv Anzeige -->
+<!-- Archiv Anzeige -->
+<div id="archive" class="container-fluid"><div id="archive" class="container">
+    <div class="accordion" id="filterAccordion">
+        <div class="accordion-item">
+            <h2 class="accordion-header" id="headingOne">
+                <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseOne" aria-expanded="false" aria-controls="collapseOne">
+                    Filter- und Anzeigeoptionen
+                </button>
+            </h2>
+            <div id="collapseOne" class="accordion-collapse collapse" aria-labelledby="headingOne">
+                <div class="accordion-body">
+                    <!-- Filterformular -->
+                    <form id="filterForm" action="/archive" method="get" class="d-flex flex-wrap gap-3 align-items-center">
+                        <div class="mb-3 flex-grow-1">
+                            <label for="album_filter" class="form-label">Album:</label>
+                            <select class="form-control" id="album_filter" name="album">
+                                <option value="">Alle</option>
+                                {% for album in albums %}
+                                    <option value="{{ album[0] }}" {% if album[0] == selected_album %}selected{% endif %}>{{ album[1] }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="mb-3 flex-grow-1">
+                            <label for="category_filter" class="form-label">Kategorie:</label>
+                            <select class="form-control" id="category_filter" name="category" multiple>
+                                <option value="">Alle</option>
+                                {% for category in categories %}
+                                    <option value="{{ category[0] }}" {% if category[0] in selected_categories %}selected{% endif %}>{{ category[1] }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="mb-3 flex-grow-1">
+                            <label for="items_per_page" class="form-label">Bilder pro Seite:</label>
+                            <select class="form-control" id="items_per_page" name="items_per_page">
+                                <option value="15" {% if items_per_page == 15 %}selected{% endif %}>15</option>
+                                <option value="30" {% if items_per_page == 30 %}selected{% endif %}>30</option>
+                                <option value="50" {% if items_per_page == 50 %}selected{% endif %}>50</option>
+                                <option value="75" {% if items_per_page == 75 %}selected{% endif %}>75</option>
+                                <option value="100" {% if items_per_page == 100 %}selected{% endif %}>100</option>
+                            </select>
+                        </div>
+                        <button type="submit" class="btn btn-primary flex-fill">Filtern</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="toolbar">
+        <button id="thumbgalleryBtn" class="btn btn-secondary">Thumbgallery</button>
+        <button id="slideshowBtn" class="btn btn-secondary">Slideshow</button>
+        <select id="gridLayout" class="form-select">
+            <option value="2">2 Bilder</option>
+            <option value="3" selected>3 Bilder</option>
+            <option value="4">4 Bilder</option>
+            <option value="5">5 Bilder</option>
+            <option value="6">6 Bilder</option>
+        </select>
+        <div class="dropdown">
+            <button class="btn btn-secondary dropdown-toggle" type="button" id="actionMenu" data-bs-toggle="dropdown" aria-expanded="false">
+                Optionen
+            </button>
+            <ul class="dropdown-menu" aria-labelledby="actionMenu">
+                <li><a class="dropdown-item" href="#" id="deleteSelected">Löschen</a></li>
+                <li><a class="dropdown-item" href="#" id="addToCategory">Zu Kategorie hinzufügen</a></li>
+                <li><a class="dropdown-item" href="#" id="addToAlbum">Zu Album hinzufügen</a></li>
+                <li><a class="dropdown-item" href="#" id="downloadSelected">Aktuelle Auswahl downloaden</a></li>
+            </ul>
+        </div>
+    </div>
+    <div class="row row-cols-3" id="imageGrid">
+        {% for log in logs %}
+            <div class="col mb-3">
+                <div class="card custom-bg">
+                    <div class="card-body p-0 position-relative">
+                        <img src="{{ log.output_file }}" 
+                            class="img-fluid image-thumbnail" 
+                            alt="Generiertes Bild" 
+                            data-id="{{ log.id }}" 
+                            data-filename="{{ log.output_file.split('/')[-1] }}" 
+                            data-format="{{ log.output_file.split('.')[-1] }}" 
+                            data-timestamp="{{ log.timestamp }}" 
+                            data-album="{{ log.album }}" 
+                            data-category="{{ log.category }}" 
+                            data-prompt="{{ log.prompt }}" 
+                            data-optimized_prompt="{{ log.optimized_prompt }}">
+                        <input type="checkbox" class="form-check-input select-item position-absolute top-0 end-0 m-2">
+                    </div>
+                </div>
+            </div>
+        {% endfor %}
+    </div>
+</div>
+
+    <div class="toolbar">
+        <button id="thumbgalleryBtn" class="btn btn-secondary">Thumbgallery</button>
+        <button id="slideshowBtn" class="btn btn-secondary">Slideshow</button>
+        <select id="gridLayout" class="form-select">
+            <option value="2">2 Bilder</option>
+            <option value="3" selected>3 Bilder</option>
+            <option value="4">4 Bilder</option>
+            <option value="5">5 Bilder</option>
+            <option value="6">6 Bilder</option>
+        </select>
+        <div class="dropdown">
+            <button class="btn btn-secondary dropdown-toggle" type="button" id="actionMenu" data-bs-toggle="dropdown" aria-expanded="false">
+                Optionen
+            </button>
+            <ul class="dropdown-menu" aria-labelledby="actionMenu">
+                <li><a class="dropdown-item" href="#" id="deleteSelected">Löschen</a></li>
+                <li><a class="dropdown-item" href="#" id="addToCategory">Zu Kategorie hinzufügen</a></li>
+                <li><a class="dropdown-item" href="#" id="addToAlbum">Zu Album hinzufügen</a></li>
+                <li><a class="dropdown-item" href="#" id="downloadSelected">Aktuelle Auswahl downloaden</a></li>
+            </ul>
+        </div>
+    </div>
+    <div class="mb-2">
+        <input type="checkbox" id="selectAll" /> Alle auswählen
+    </div>
+    <!-- Bildgrid -->
+    <div class="row row-cols-3" id="imageGrid">
+        {% for log in logs %}
+            <div class="col mb-3">
+                <div class="card custom-bg">
+                    <div class="card-body p-0 position-relative">
+                        <img src="{{ log.output_file }}" 
+                            class="img-fluid image-thumbnail" 
+                            alt="Generiertes Bild" 
+                            data-id="{{ log.id }}" 
+                            data-filename="{{ log.output_file.split('/')[-1] }}" 
+                            data-format="{{ log.output_file.split('.')[-1] }}" 
+                            data-timestamp="{{ log.timestamp }}" 
+                            data-album="{{ log.album }}" 
+                            data-category="{{ log.category }}" 
+                            data-prompt="{{ log.prompt }}" 
+                            data-optimized_prompt="{{ log.optimized_prompt }}">
+                        <input type="checkbox" class="form-check-input select-item position-absolute top-0 end-0 m-2">
+                    </div>
+                </div>
+            </div>
+        {% endfor %}
+    </div>
+</div>
+
+<!-- Paginierung -->
+<div class="d-flex justify-content-center mt-4">
+    {% if page > 1 %}
+        <a class="btn btn-secondary me-2" href="?page={{ page - 1 }}&items_per_page={{ items_per_page }}{% if search_query %}&search={{ search_query }}{% endif %}{% if selected_album %}&album={{ selected_album }}{% endif %}{% if selected_categories %}&category={{ selected_categories | join(',') }}{% endif %}">Vorherige Seite</a>
+    {% endif %}
+    {% if logs|length == items_per_page %}
+        <a class="btn btn-secondary" href="?page={{ page + 1 }}&items_per_page={{ items_per_page }}{% if search_query %}&search={{ search_query }}{% endif %}{% if selected_album %}&album={{ selected_album }}{% endif %}{% if selected_categories %}&category={{ selected_categories | join(',') }}{% endif %}">Nächste Seite</a>
+    {% endif %}
+</div>
+
+<button id="scrollTopBtn" style="display: none; position: fixed; bottom: 20px; right: 20px; z-index: 99; border: none; background: transparent;">
+    <img src="/static/arrow-up1.png" alt="Nach oben" style="width: 50px; height: 50px;">
+</button>
+
+<!-- "Nach oben"-Button -->
+<!-- <button id="scrollTopBtn" class="btn btn-primary" style="display: none; position: fixed; bottom: 20px; right: 20px; width: 100px; z-index: 99;">
+    Nach oben
+</button> -->
+
+<!-- Bild-Detail Modal -->
+<div id="imageModal" class="modal fade" tabindex="-1" aria-labelledby="imageModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="imageModalLabel">Bilddetails</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Schließen"></button>
+            </div>
+            <div class="modal-body">
+                <div class="image-container" style="cursor: pointer;">
+                    <img id="modalImage" src="" class="img-fluid mb-3" alt="Bild">
+                </div>
+                <div class="image-details">
+                    <p><strong>Dateiname:</strong> <span id="modalFilename"></span></p>
+                    <p><strong>Bildformat:</strong> <span id="modalFormat"></span></p>
+                    <p><strong>Datum:</strong> <span id="modalTimestamp"></span></p>
+                    <p><strong>Album:</strong> <span id="modalAlbum"></span></p>
+                    <p><strong>Kategorie:</strong> <span id="modalCategory"></span></p>
+                    <p><strong>Eingabeaufforderung:</strong> <span id="modalPrompt"></span></p>
+                    <p><strong>Optimierte Eingabeaufforderung:</strong> <span id="modalOptimizedPrompt"></span></p>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-primary" id="modalDownloadBtn">
+                    <i class="fas fa-download"></i> Download
+                </button>
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Schließen</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Thumbnail-Galerie Modal -->
+<div id="thumbGalleryModal" class="modal fade" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Thumbnail-Galerie</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div id="thumbGalleryContainer" class="d-flex flex-wrap justify-content-center">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Schließen</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Slideshow Modal -->
+<div id="slideshowModal" class="modal fade" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Diashow</h5>
+                <div class="btn-group ms-auto me-2">
+                    <button class="btn btn-primary btn-sm" id="playSlideshow">
+                        <i class="fas fa-play"></i>
+                    </button>
+                    <button class="btn btn-primary btn-sm" id="pauseSlideshow" style="display: none;">
+                        <i class="fas fa-pause"></i>
+                    </button>
+                    <button class="btn btn-primary btn-sm" id="fullscreenBtn">
+                        <i class="fas fa-expand"></i>
+                    </button>
+                    <button class="btn btn-primary btn-sm" id="downloadCurrentSlide">
+                        <i class="fas fa-download"></i>
+                    </button>
+                </div>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div id="carouselExampleControls" class="carousel slide" data-bs-interval="false">
+                    <div id="slideshowContainer" class="carousel-inner"></div>
+                    <button class="carousel-control-prev" type="button" data-bs-target="#carouselExampleControls" data-bs-slide="prev">
+                        <span class="carousel-control-prev-icon" aria-hidden="true"></span>
+                        <span class="visually-hidden">Vorherige</span>
+                    </button>
+                    <button class="carousel-control-next" type="button" data-bs-target="#carouselExampleControls" data-bs-slide="next">
+                        <span class="carousel-control-next-icon" aria-hidden="true"></span>
+                        <span class="visually-hidden">Nächste</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Modal für Zuweisung zu Album/Kategorie -->
+<div id="assignAlbumModal" class="modal fade" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Zu Album hinzufügen</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <select class="form-control" id="albumSelect">
+                    {% for album in albums %}
+                        <option value="{{ album[0] }}">{{ album[1] }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Abbrechen</button>
+                <button type="button" class="btn btn-primary" id="assignAlbumBtn">Hinzufügen</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div id="assignCategoryModal" class="modal fade" tabindex="-1">
+   <div class="modal-dialog">
+       <div class="modal-content">
+           <div class="modal-header">
+               <h5 class="modal-title">Zu Kategorie hinzufügen</h5>
+               <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+           </div>
+           <div class="modal-body">
+               <select class="form-control" id="categorySelect" multiple>
+                   {% for category in categories %}
+                       <option value="{{ category[0] }}">{{ category[1] }}</option>
+                   {% endfor %}
+               </select>
+           </div>
+           <div class="modal-footer">
+               <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Abbrechen</button>
+               <button type="button" class="btn btn-primary" id="assignCategoryBtn">Hinzufügen</button>
+           </div>
+       </div>
+   </div>
+</div>
+
+<!-- CSS Styles -->
+<style>
+.image-container {
+   position: relative;
+   text-align: center;
+   max-height: 80vh;
+   overflow: auto;
+}
+
+.image-container img {
+   max-width: 100%;
+   height: auto;
+   transition: transform 0.2s;
+}
+
+.image-container img:hover {
+   transform: scale(1.02);
+}
+
+.thumb-container {
+   position: relative;
+   display: inline-block;
+}
+
+.download-thumb {
+   position: absolute;
+   bottom: 5px;
+   right: 5px;
+   opacity: 0;
+   transition: opacity 0.3s;
+}
+
+.thumb-container:hover .download-thumb {
+   opacity: 1;
+}
+
+.carousel-item img {
+   max-height: 80vh;
+   object-fit: contain;
+}
+
+#slideshowModal.fullscreen .modal-dialog {
+   max-width: 100%;
+   margin: 0;
+   height: 100vh;
+}
+
+#slideshowModal.fullscreen .modal-content {
+   height: 100%;
+   border: none;
+   border-radius: 0;
+}
+
+.carousel-control-prev,
+.carousel-control-next {
+   width: 10%;
+   opacity: 0;
+   transition: opacity 0.3s;
+}
+
+.carousel:hover .carousel-control-prev,
+.carousel:hover .carousel-control-next {
+   opacity: 0.5;
+}
+
+.modal-dialog {
+   max-width: 90vw;
+   margin: 1.75rem auto;
+}
+
+.image-details {
+   margin-top: 1rem;
+   padding: 1rem;
+   background-color: rgba(0,0,0,0.02);
+   border-radius: 4px;
+}
+
+.modal-footer {
+   justify-content: space-between;
+}
+</style>
+
+<!-- {% block scripts %}
+<script src="/static/script.js"></script>
+{% endblock %} -->
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+   // Hilfsfunktion für Einzelbild-Download
+   async function downloadSingleImage(filename) {
+	   try {
+		   // Verwende GET anstelle von POST, wenn der Server nur GET akzeptiert
+		   const response = await fetch(`/flux-pics/${filename}`);
+   
+		   if (!response.ok) {
+			   const errorText = await response.text();
+			   console.error('Server Error:', errorText);
+			   throw new Error(`HTTP error! status: ${response.status}`);
+		   }
+   
+		   const blob = await response.blob(); // Bilddaten abrufen
+		   const url = window.URL.createObjectURL(blob); // Temporäre URL erstellen
+		   const a = document.createElement('a'); // <a>-Element erstellen
+		   a.style.display = 'none';
+		   a.href = url;
+		   a.download = filename; // Dateiname zum Herunterladen
+		   document.body.appendChild(a); // In den DOM einfügen
+		   a.click(); // Simuliere einen Klick
+		   window.URL.revokeObjectURL(url); // Temporäre URL freigeben
+	   } catch (error) {
+		   console.error('Fehler beim Download:', error);
+		   alert('Ein Fehler ist aufgetreten: ' + error.message);
+	   }
+   }
+
+
+   // Function to open modal with image details
+   function openImageModal(img) {
+       const modal = new bootstrap.Modal(document.getElementById('imageModal'));
+       const modalImg = document.getElementById('modalImage');
+       const filename = img.dataset.filename;
+
+       modalImg.src = img.src;
+       document.getElementById('modalFilename').textContent = filename;
+       document.getElementById('modalFormat').textContent = img.dataset.format;
+       document.getElementById('modalTimestamp').textContent = img.dataset.timestamp;
+       document.getElementById('modalAlbum').textContent = img.dataset.album;
+       document.getElementById('modalCategory').textContent = img.dataset.category;
+       document.getElementById('modalPrompt').textContent = img.dataset.prompt;
+       document.getElementById('modalOptimizedPrompt').textContent = img.dataset.optimized_prompt;
+
+       // Click-to-Close Funktionalität
+       document.querySelector('.image-container').onclick = function(e) {
+           if (e.target === modalImg) {
+               modal.hide();
+           }
+       };
+
+       // Download-Button Funktionalität
+       document.getElementById('modalDownloadBtn').onclick = async function() {
+           await downloadSingleImage(filename);
+       };
+
+       modal.show();
+   }
+
+   // Event listener for image click
+   document.querySelectorAll('.image-thumbnail').forEach(function(img) {
+       img.addEventListener('click', function() {
+           openImageModal(this);
+       });
+   });
+
+   // Überarbeitete getSelectedImages Funktion
+   function getSelectedImages() {
+       const selectedImages = [];
+       const checkboxes = document.querySelectorAll('.select-item:checked');
+       console.log(`Found ${checkboxes.length} selected images`);
+       
+       checkboxes.forEach(checkbox => {
+           const img = checkbox.closest('.card').querySelector('img');
+           if (img && img.getAttribute('data-filename')) {
+               selectedImages.push(img.getAttribute('data-filename'));
+           } else {
+               console.warn('Missing image or filename for selected checkbox');
+           }
+       });
+       return selectedImages;
+   }
+
+   // "Alle auswählen" Checkbox-Logik
+   const selectAllCheckbox = document.getElementById('selectAll');
+   const itemCheckboxes = document.querySelectorAll('.select-item');
+   
+   selectAllCheckbox.addEventListener('change', function () {
+       itemCheckboxes.forEach(checkbox => {
+           checkbox.checked = selectAllCheckbox.checked;
+       });
+   });
+
+   // Download ausgewählter Bilder
+   document.getElementById('downloadSelected').addEventListener('click', async function () {
+       const selectedImages = getSelectedImages();
+       console.log('Selected images:', selectedImages);
+
+       if (selectedImages.length === 0) {
+           alert('Keine Bilder ausgewählt.');
+           return;
+       }
+
+       let downloadType = 'single';
+       if (selectedImages.length > 1) {
+           const choice = confirm('Möchten Sie die Bilder als ZIP-Datei herunterladen?\nKlicken Sie "OK" für ZIP oder "Abbrechen" für Einzeldownloads.');
+           if (choice) {
+               downloadType = 'zip';
+           }
+       }
+
+       try {
+           if (downloadType === 'zip') {
+               const response = await fetch('/flux-pics', {
+                   method: 'POST',
+                   headers: { 'Content-Type': 'application/json' },
+                   body: JSON.stringify({ selectedImages })
+               });
+
+               if (!response.ok) {
+                   const errorText = await response.text();
+                   console.error('Server Error:', errorText);
+                   throw new Error(`HTTP error! status: ${response.status}`);
+               }
+
+               const blob = await response.blob();
+               const url = window.URL.createObjectURL(blob);
+               const a = document.createElement('a');
+               a.style.display = 'none';
+               a.href = url;
+               a.download = 'images.zip';
+               document.body.appendChild(a);
+               a.click();
+               window.URL.revokeObjectURL(url);
+           } else {
+               for (const filename of selectedImages) {
+                   await downloadSingleImage(filename);
+                   await new Promise(resolve => setTimeout(resolve, 500));
+               }
+           }
+           alert('Download erfolgreich abgeschlossen.');
+       } catch (error) {
+           console.error('Fehler beim Downloaden:', error);
+           alert('Ein Fehler ist aufgetreten: ' + error.message);
+       }
+   });
+
+   // Thumbnail-Galerie
+   document.getElementById('thumbgalleryBtn').addEventListener('click', function () {
+       const selectedImages = getSelectedImages();
+       if (selectedImages.length === 0) {
+           alert('Keine Bilder ausgewählt.');
+           return;
+       }
+
+       const galleryModal = new bootstrap.Modal(document.getElementById('thumbGalleryModal'));
+       const galleryContainer = document.getElementById('thumbGalleryContainer');
+       galleryContainer.innerHTML = '';
+
+       selectedImages.forEach(filename => {
+           const container = document.createElement('div');
+           container.className = 'thumb-container m-2';
+           
+           const img = document.createElement('img');
+           img.src = `/flux-pics/${filename}`;
+           img.className = 'img-thumbnail thumbnail-img';
+           img.dataset.filename = filename;
+           img.style.maxWidth = '150px';
+           img.style.cursor = 'pointer';
+           
+           const downloadBtn = document.createElement('button');
+           downloadBtn.className = 'btn btn-sm btn-primary download-thumb';
+           downloadBtn.innerHTML = '<i class="fas fa-download"></i>';
+           
+           container.appendChild(img);
+           container.appendChild(downloadBtn);
+           galleryContainer.appendChild(container);
+
+           img.addEventListener('click', () => openImageModal(img));
+           downloadBtn.addEventListener('click', async () => {
+               await downloadSingleImage(filename);
+           });
+       });
+
+       galleryModal.show();
+   });
+
+   // Slideshow
+   document.getElementById('slideshowBtn').addEventListener('click', function () {
+       const selectedImages = getSelectedImages();
+       if (selectedImages.length === 0) {
+           alert('Keine Bilder ausgewählt.');
+           return;
+       }
+
+       const slideshowModal = new bootstrap.Modal(document.getElementById('slideshowModal'));
+       const slideshowContainer = document.getElementById('slideshowContainer');
+       slideshowContainer.innerHTML = '';
+       
+       let slideshowInterval;
+       const slideInterval = 5000; // 3 Sekunden pro Bild
+
+       selectedImages.forEach((filename, index) => {
+           const div = document.createElement('div');
+           div.classList.add('carousel-item');
+           if (index === 0) div.classList.add('active');
+
+           const img = document.createElement('img');
+           img.src = `/flux-pics/${filename}`;
+           img.classList.add('d-block', 'w-100');
+           img.dataset.filename = filename;
+           
+           div.appendChild(img);
+           slideshowContainer.appendChild(div);
+       });
+
+       const carousel = new bootstrap.Carousel(document.getElementById('carouselExampleControls'), {
+           interval: false
+       });
+
+       // Play/Pause Funktionalität
+       const playBtn = document.getElementById('playSlideshow');
+       const pauseBtn = document.getElementById('pauseSlideshow');
+
+       playBtn.addEventListener('click', function() {
+           slideshowInterval = setInterval(() => {
+               carousel.next();
+           }, slideInterval);
+           playBtn.style.display = 'none';
+           pauseBtn.style.display = 'block';
+       });
+
+       pauseBtn.addEventListener('click', function() {
+           clearInterval(slideshowInterval);
+           pauseBtn.style.display = 'none';
+           playBtn.style.display = 'block';
+       });
+
+       // Vollbild Funktionalität
+       document.getElementById('fullscreenBtn').addEventListener('click', function() {
+           const modalElement = document.getElementById('slideshowModal');
+           if (modalElement.requestFullscreen) {
+               modalElement.requestFullscreen();
+           } else if (modalElement.webkitRequestFullscreen) {
+               modalElement.webkitRequestFullscreen();
+           } else if (modalElement.msRequestFullscreen) {
+               modalElement.msRequestFullscreen();
+           }
+       });
+
+       // Download aktuelles Bild
+       document.getElementById('downloadCurrentSlide').addEventListener('click', async function() {
+           const activeSlide = slideshowContainer.querySelector('.carousel-item.active img');
+           if (activeSlide) {
+               await downloadSingleImage(activeSlide.dataset.filename);
+           }
+       });
+
+       slideshowModal.show();
+   });
+
+   // Grid Layout
+   document.getElementById('gridLayout').addEventListener('change', function () {
+       const columns = parseInt(this.value);
+       const imageGrid = document.getElementById('imageGrid');
+       imageGrid.className = `row row-cols-1 row-cols-md-${columns}`;
+   });
+
+   // Nach oben Button
+   const scrollTopBtn = document.getElementById('scrollTopBtn');
+   window.addEventListener('scroll', function () {
+       if (window.scrollY > 300) {
+           scrollTopBtn.style.display = 'block';
+       } else {
+           scrollTopBtn.style.display = 'none';
+       }
+   });
+
+   scrollTopBtn.addEventListener('click', function () {
+       window.scrollTo({ top: 0, behavior: 'smooth' });
+   });
+
+
+});
+</script>
+
+{% endblock %}
+
+====================
+Dateipfad: /mnt/d/wsl/apps/testen/flux-app1/mainfile/templates
+Dateiname: backend.html
+Änderungsdatum: 2024-12-27 03:14:43
+====================
+
+{% extends "base.html" %}
+
+{% block title %}Backend Verwaltung{% endblock %}
+
+{% block content %}
+<h1>Backend Verwaltung</h1>
+
+<!-- Album- und Kategorieverwaltung -->
+<div class="mb-3">
+    <h2>Alben und Kategorien verwalten</h2>
+    <form action="/create_album" method="post" class="mb-2">
+        <input type="text" name="name" placeholder="Neuer Albumname" required class="form-control mb-2">
+        <button type="submit" class="btn btn-primary">Album erstellen</button>
+    </form>
+    <form action="/create_category" method="post" class="mb-2">
+        <input type="text" name="name" placeholder="Neuer Kategoriename" required class="form-control mb-2">
+        <button type="submit" class="btn btn-primary">Kategorie erstellen</button>
+    </form>
+</div>
+
+<!-- Liste der Alben -->
+<div class="mb-3">
+    <h2>Bestehende Alben</h2>
+    <ul>
+        {% for album in albums %}
+            <li>{{ album[1] }}</li>
+        {% endfor %}
+    </ul>
+</div>
+
+<!-- Liste der Kategorien -->
+<div class="mb-3">
+    <h2>Bestehende Kategorien</h2>
+    <ul>
+        {% for category in categories %}
+            <li>{{ category[1] }}</li>
+        {% endfor %}
+    </ul>
+</div>
+
+====================
+Dateipfad: /mnt/d/wsl/apps/testen/flux-app1/mainfile/templates
+Dateiname: base.html
+Änderungsdatum: 2025-01-01 13:05:18
+====================
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}Flux Image Generator{% endblock %}</title>
+    <link rel="icon" href="/static/favicon.ico" type="image/x-icon">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
+    <link rel="stylesheet" href="/static/style.css">
+    <style>
+        .custom-bg {
+            background-color: #f8f9fa; /* Leicht abgehobenes Weiß */
+        }
+    </style>
+    {% block head %}
+    <!-- Additional head elements can be added here -->
+    {% endblock %}
+</head>
+<body>
+    <div class="container">
+	<form id="generateForm" class="needs-validation custom-bg p-3 rounded" novalidate>
+		<div class="banner-container mb-4">
+			<img src="/static/banner.jpg" alt="Flux Image Generator Banner" class="img-fluid w-100">
+		</div>
+
+		<div class="nav-buttons d-flex flex-wrap justify-content-end gap-2">
+			<a href="/" class="btn btn-primary flex-fill">Home</a>
+			<a href="/archive" class="btn btn-secondary flex-fill">Archiv</a>
+			<a href="/backend" class="btn btn-secondary flex-fill">Backend</a>
+		</div>
+
+        <!-- Navigation Buttons -->
+		<!--
+        <div class="d-flex justify-content-end my-3">
+            <a href="/" class="btn btn-primary me-2">Home</a>
+            <a href="/archive" class="btn btn-secondary me-2">Archiv</a>
+            <a href="/backend" class="btn btn-secondary">Backend</a>
+        </div>
+        -->
+        {% block content %}
+        <!-- Main content will be injected here -->
+        {% endblock %}
+	</form>
+    </div>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    {% block scripts %}
+    <!-- Additional scripts can be added here -->
+    {% endblock %}
+</body>
+
+====================
+Dateipfad: /mnt/d/wsl/apps/testen/flux-app1/mainfile/templates
+Dateiname: index.html
+Änderungsdatum: 2025-01-01 12:33:47
+====================
+
+{% extends "base.html" %}
+
+{% block title %}Flux Image Generator - Home{% endblock %}
+
+{% block content %}
+<!-- <h1>Flux Image Generator</h1> -->
+
+<form id="generateForm" class="needs-validation custom-bg p-3 rounded" novalidate>
+    <!-- Prompt-Eingabe -->
+    <div class="mb-3">
+        <label for="prompt" class="form-label">Prompt:</label>
+        <textarea class="form-control" id="prompt" name="prompt" rows="4" required></textarea>
+        <div class="invalid-feedback">Bitte geben Sie einen Prompt ein.</div>
+    </div>
+    <!-- Fortschrittsanzeige -->
+    <div class="progress mb-3" id="progressContainer" style="display: none;">
+        <div id="progressBar" class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar" style="width: 0%;" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"></div>
+    </div>
+
+    <!-- Fortschrittsnachricht -->
+	<div id="progressMessage" class="mb-3 blink-text" style="display: none;">
+		<p></h4>Generiere Bilder, bitte warten...</h4></p>
+	</div>
+    <!-- Album-Auswahl -->
+    <div class="mb-3">
+        <label for="album_id" class="form-label">Album:</label>
+        <input class="form-control" id="album_id" name="album_id" list="albums" placeholder="Wählen oder neues Album eingeben">
+        <datalist id="albums">
+            {% for album in albums %}
+                <option value="{{ album[1] }}">{{ album[0] }}</option>
+            {% endfor %}
+        </datalist>
+    </div>
+    <!-- Kategorie-Auswahl -->
+    <div class="mb-3">
+        <label for="category_id" class="form-label">Kategorie:</label>
+        <input class="form-control" id="category_id" name="category_id" list="categories" placeholder="Wählen oder neue Kategorie eingeben">
+        <datalist id="categories">
+            {% for category in categories %}
+                <option value="{{ category[1] }}">{{ category[0] }}</option>
+            {% endfor %}
+        </datalist>
+    </div>
+	<div class="btn-group d-flex flex-wrap">
+		<button type="button" class="btn btn-primary flex-fill mb-3" onclick="startGeneration()">ERSTELLEN</button>
+		<button type="button" class="btn btn-secondary flex-fill mb-3" onclick="optimizeOnly()">OPTIMIEREN</button>
+		<button type="button" class="btn btn-secondary flex-fill mb-3" onclick="copyPrompt()">ZURÜCKSETZEN</button>
+	</div>
+
+    <!-- 
+	Buttons zur Generierung und Optimierung 
+    <button type="button" class="btn btn-primary mb-3" onclick="startGeneration()">Bild Generieren</button>
+    <button type="button" class="btn btn-secondary mb-3" onclick="optimizeOnly()">Nur Optimieren</button>
+    <button type="button" class="btn btn-secondary mb-3" onclick="copyPrompt()">Prompt Kopieren</button>
+	-->
+    <!-- Erweiterte Einstellungen -->
+    <div class="accordion" id="advancedSettingsAccordion">
+        <div class="accordion-item custom-bg">
+            <h2 class="accordion-header" id="headingOne">
+                <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseOne" aria-expanded="false" aria-controls="collapseOne">
+                    Erweiterte Einstellungen
+                </button>
+            </h2>
+            <div id="collapseOne" class="accordion-collapse collapse" aria-labelledby="headingOne" data-bs-parent="#advancedSettingsAccordion">
+                <div class="accordion-body">
+                    <div class="row g-3">
+                        <div class="col-12 col-md-6">
+                            <label for="num_outputs" class="form-label">Anzahl der Ausgaben:</label>
+                            <select class="form-select" id="num_outputs" name="num_outputs">
+                                <option value="1">1</option>
+                                <option value="2">2</option>
+                                <option value="3">3</option>
+                                <option value="4">4</option>
+                            </select>
+                        </div>
+                        <div class="col-12 col-md-6">
+                            <label for="aspect_ratio" class="form-label">Seitenverhältnis:</label>
+                            <select class="form-select" id="aspect_ratio" name="aspect_ratio">
+                                <option value="1:1">1:1</option>
+                                <option value="16:9">16:9</option>
+                                <option value="21:9">21:9</option>
+                                <option value="3:2">3:2</option>
+                                <option value="2:3">2:3</option>
+                                <option value="4:5">4:5</option>
+                                <option value="5:4">5:4</option>
+                                <option value="3:4">3:4</option>
+                                <option value="4:3">4:3</option>
+                                <option value="9:16">9:16</option>
+                                <option value="9:21">9:21</option>
+                            </select>
+                        </div>
+                        <div class="col-12 col-md-6">
+                            <label for="output_format" class="form-label">Ausgabeformat:</label>
+                            <select class="form-select" id="output_format" name="output_format">
+                                <option value="png">PNG</option>
+                                <option value="jpg">JPG</option>
+                                <option value="webp">WEBP</option>
+                            </select>
+                        </div>
+                        <div class="col-12 col-md-6">
+                            <label for="guidance_scale" class="form-label">Guidance Scale:</label>
+                            <input type="number" step="0.1" class="form-control" id="guidance_scale" name="guidance_scale" value="3.5">
+                        </div>
+                        <div class="col-12 col-md-6">
+                            <label for="output_quality" class="form-label">Ausgabequalität:</label>
+                            <input type="number" class="form-control" id="output_quality" name="output_quality" value="80">
+                        </div>
+                        <div class="col-12 col-md-6">
+                            <label for="prompt_strength" class="form-label">Prompt Strength:</label>
+                            <input type="number" step="0.1" class="form-control" id="prompt_strength" name="prompt_strength" value="0.8">
+                        </div>
+                        <div class="col-12 col-md-6">
+                            <label for="num_inference_steps" class="form-label">Anzahl der Inference Steps:</label>
+                            <input type="number" class="form-control" id="num_inference_steps" name="num_inference_steps" value="28">
+                        </div>
+                        <div class="col-12 col-md-6">
+                            <label for="lora_scale" class="form-label">LoRA Scale:</label>
+                            <input type="number" step="0.1" class="form-control" id="lora_scale" name="lora_scale" value="0.8">
+                        </div>
+<!--                        <div class="col-12 col-md-6 d-flex align-items-center"> 
+                        <div class="col-12 col-md-6">
+                            <input class="form-check-input" type="checkbox" id="hf_lora_toggle" name="hf_lora_toggle" checked>
+                            <label class="form-check-label" for="hf_lora_toggle">HF LoRA verwenden</label>
+                        </div> -->
+						
+						<div class="col-12 col-md-6">
+							<label class="form-check-label" for="hf_lora_toggle">HF LoRA verwenden:</label>
+							<input class="form-control" type="text" id="hf_lora_toggle" name="hf_lora_toggle" value="Scalino84/my-flux-face">
+						</div>
+                        <div class="col-12 col-md-6">
+                            <label class="form-check-label" for="agent">Mistral Agent verwenden:</label>
+                            <input class="form-check-input" type="checkbox" id="agent" name="agent" checked>
+                        </div>
+<!--                        </div> -->
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Batch-Optimierung -->
+    <div class="accordion mt-3" id="batchOptimizationAccordion">
+        <div class="accordion-item custom-bg">
+            <h2 class="accordion-header" id="headingTwo">
+                <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseTwo" aria-expanded="false" aria-controls="collapseTwo">
+                    Batch-Optimierung
+                </button>
+            </h2>
+            <div id="collapseTwo" class="accordion-collapse collapse" aria-labelledby="headingTwo" data-bs-parent="#batchOptimizationAccordion">
+                <div class="accordion-body">
+                    <textarea id="batchPrompts" class="form-control" rows="10" placeholder="Mehrere Prompts eingeben, einer pro Zeile"></textarea>
+                    <button type="button" class="btn btn-primary mt-2" onclick="batchOptimize()">Batch Optimieren</button>
+                </div>
+            </div>
+			    <!-- Bildausgabebereich -->
+			<div id="output" class="mt-4 p-2 border rounded bg-light">
+				<!--<h5>Generierte Bilder:</h5>-->
+				<!-- Bilder werden hier dynamisch hinzugefügt -->
+			</div>
+        </div>
+    </div>
+</form>
+
+<!-- Ausgabebereich -->
+<div id="output" class="mt-3"></div>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.12/cropper.min.js"></script>
+<script>
+    // Initialisierung des Croppers
+    let cropper;
+    function startCropper(imageElement) {
+        if (cropper) {
+            cropper.destroy();
+        }
+        cropper = new Cropper(imageElement, {
+            aspectRatio: 1,
+            viewMode: 1,
+            autoCropArea: 1,
+            responsive: true,
+        });
+    }
+
+    // Funktion zur Bildgenerierung
+    function startGeneration() {
+        const form = document.getElementById('generateForm');
+        if (!form.checkValidity()) {
+            form.classList.add('was-validated');
+            return;
+        }
+
+        // Fortschrittsanzeige einblenden
+        const progressContainer = document.getElementById('progressContainer');
+        progressContainer.style.display = 'block';
+        const progressBarInner = document.getElementById('progressBar');
+        progressBarInner.style.width = '0%';
+        progressBarInner.setAttribute('aria-valuenow', 0);
+
+        const progressMessage = document.getElementById('progressMessage');
+        progressMessage.style.display = 'block';
+
+        const outputDiv = document.getElementById('output');
+        outputDiv.innerHTML = '';
+
+        const formData = new FormData(form);
+
+		// HF LoRA-Einstellung hinzufügen
+		const hfLoraInput = document.getElementById('hf_lora_toggle');
+		const hfLoraValue = hfLoraInput.value.trim();
+		
+		if (hfLoraValue) {
+			formData.append('hf_lora', hfLoraValue);
+		} else {
+			formData.delete('hf_lora');
+		}
+
+        // Formulardaten in ein Objekt umwandeln
+        const formObject = Object.fromEntries(formData.entries());
+
+        // WebSocket-Verbindung öffnen
+        const socket = new WebSocket('ws://localhost:8000/ws');
+
+        socket.onopen = function (event) {
+            socket.send(JSON.stringify(formObject));
+        };
+
+        socket.onmessage = function (event) {
+            const data = JSON.parse(event.data);
+            if (data.optimized_prompt) {
+                document.getElementById('prompt').value = data.optimized_prompt;
+            }
+            if (data.progress !== undefined) {
+                progressBarInner.style.width = `${data.progress}%`;
+                progressBarInner.setAttribute('aria-valuenow', data.progress);
+            }
+            if (data.message) {
+                const message = document.createElement('div');
+                message.textContent = data.message;
+                outputDiv.appendChild(message);
+            }
+            if (data.generated_files) {
+                data.generated_files.forEach(file => {
+                    const img = document.createElement('img');
+                    img.src = file;
+                    img.style.maxWidth = '100%';
+                    outputDiv.appendChild(img);
+                    const promptText = document.createElement('p');
+                    promptText.textContent = `Prompt: ${formData.get('prompt')}`;
+                    outputDiv.appendChild(promptText);
+                    const copyButton = document.createElement('button');
+                    copyButton.textContent = 'Prompt Kopieren';
+                    copyButton.className = 'btn btn-secondary mt-2';
+                    copyButton.onclick = function() { copyPrompt(formData.get('prompt')) };
+                    outputDiv.appendChild(copyButton);
+                    outputDiv.appendChild(document.createElement('br'));
+                });
+                // Fortschrittsanzeige ausblenden
+                progressContainer.style.display = 'none';
+                progressMessage.style.display = 'none';
+            }
+        };
+        socket.onerror = function (event) {
+            console.error('WebSocket error:', event);
+            // Fortschrittsanzeige ausblenden im Fehlerfall
+            progressContainer.style.display = 'none';
+            progressMessage.style.display = 'none';
+        };
+
+        socket.onclose = function (event) {
+            console.log('WebSocket connection closed:', event);
+        };
+        // Alle Buttons auf der Seite deaktivieren
+        const buttons = document.querySelectorAll('button');
+        buttons.forEach(button => {
+            button.disabled = true;
+        });
+    }
+
+    // Funktion zur Optimierung des Prompts
+    function optimizeOnly() {
+        const form = document.getElementById('generateForm');
+        if (!form.checkValidity()) {
+            form.classList.add('was-validated');
+            return;
+        }
+
+        const formData = new FormData(form);
+
+        // HF LoRA-Einstellung hinzufügen
+        if (document.getElementById('hf_lora_toggle').checked) {
+            formData.append('hf_lora', 'Scalino84/my-flux-face');
+        } else {
+            formData.delete('hf_lora');
+        }
+
+        // Formulardaten in ein Objekt umwandeln
+        const formObject = Object.fromEntries(formData.entries());
+        formObject.optimize_only = true;
+
+        // WebSocket-Verbindung öffnen
+        const socket = new WebSocket('ws://localhost:8000/ws');
+
+        socket.onopen = function (event) {
+            socket.send(JSON.stringify(formObject));
+        };
+
+        socket.onmessage = function (event) {
+            const data = JSON.parse(event.data);
+            if (data.optimized_prompt) {
+                document.getElementById('prompt').value = data.optimized_prompt;
+            }
+        };
+
+        socket.onerror = function (event) {
+            console.error('WebSocket error:', event);
+        };
+
+        socket.onclose = function (event) {
+            console.log('WebSocket connection closed:', event);
+        };
+    }
+
+    function batchOptimize() {
+        // Prompts aus dem Textbereich sammeln
+        const batchPrompts = document.getElementById('batchPrompts').value.split('\n').filter(prompt => prompt.trim() !== '');
+        if (batchPrompts.length === 0) {
+            alert("Bitte geben Sie mindestens einen Prompt ein.");
+            return;
+        }
+
+        // Formulardaten sammeln
+        const formData = new FormData(document.getElementById('generateForm'));
+        const prompts = batchPrompts.map(prompt => {
+            const data = Object.fromEntries(formData);
+            data.prompt = prompt;
+            return data;
+        });
+
+        // Add HF LoRA toggle value to each prompt
+		if (hf_lora_toggle.checked) {
+			formData.append('hf_lora', 'Scalino84/my-flux-face');
+		} else {
+			formData.delete('hf_lora');
+		}
+
+        // WebSocket-Verbindung öffnen
+        const socket = new WebSocket('ws://localhost:8000/ws');
+
+        socket.onopen = function () {
+            // Prompts an den Server senden
+            socket.send(JSON.stringify({ prompts }));
+        };
+
+        socket.onmessage = function (event) {
+            const data = JSON.parse(event.data);
+            if (data.optimized_prompt) {
+                document.getElementById('prompt').value = data.optimized_prompt;
+            }
+            if (data.generated_files) {
+                data.generated_files.forEach(file => {
+                    const livePreviewImage = document.getElementById('livePreviewImage');
+                    if (livePreviewImage) {
+                        livePreviewImage.src = file;
+                    } else {
+                        const img = document.createElement('img');
+                        img.id = 'livePreviewImage';
+                        img.src = file;
+                        img.style.maxWidth = '100%';
+                        document.getElementById('output').appendChild(img);
+                    }
+                });
+            }
+        };
+
+        socket.onerror = function (event) {
+            console.error('WebSocket error:', event);
+            alert('Ein Fehler ist aufgetreten. Bitte versuchen Sie es erneut.');
+        };
+
+        socket.onclose = function (event) {
+            console.log('WebSocket connection closed:', event);
+        };
+    }
+
+    function copyPrompt() {
+        const promptText = document.getElementById('prompt').value;
+        navigator.clipboard.writeText(promptText).then(() => {
+            alert('Prompt in die Zwischenablage kopiert!');
+        }).catch(err => {
+            console.error('Fehler beim Kopieren des Prompts:', err);
+        });
+    }
+</script>
+
+====================
+Ordnerstruktur:
+├── main.py
+├── static
+│   ├── background.png
+│   ├── favicon.ico
+│   ├── script.js
+│   └── style.css
+└── templates
+    ├── archive.html
+    ├── backend.html
+    ├── base.html
+    ├── favicon.ico
+    └── index.html
+
+3 directories, 10 files
+'''
